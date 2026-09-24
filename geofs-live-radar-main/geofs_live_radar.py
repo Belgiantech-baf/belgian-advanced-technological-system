@@ -24,6 +24,7 @@ import math
 import logging
 import re
 import time
+import hmac
 from pathlib import Path
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
@@ -90,6 +91,7 @@ SCRAMBLE_CONFIG_PATH = Path(__file__).resolve().parent / "scramble_config.json"
 CHAT_LOG_CONFIG_PATH = Path(__file__).resolve().parent / "chat_logger_config.json"
 CHAT_LOG_CHANNEL_ID = 1497398101667745942
 BOC_LOG_MAX_LENGTH = 1800
+BOC_RELAY_KEY = os.environ.get("BOC_RELAY_KEY", "").strip()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -588,6 +590,8 @@ def receive_boc_log():
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
     return response
+  if BOC_RELAY_KEY and not hmac.compare_digest(request.headers.get("X-BOC-Relay-Key", ""), BOC_RELAY_KEY):
+    return make_response(json.dumps({"error": "Unauthorized relay"}), 401, {"Content-Type": "application/json"})
 
   payload = request.get_json(silent=True)
   if not isinstance(payload, dict):

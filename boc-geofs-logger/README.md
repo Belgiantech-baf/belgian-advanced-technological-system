@@ -29,6 +29,7 @@ GeoFS authorized client -> HTTPS ingest -> this VPS -> SQLite -> REST/SSE -> BOC
 - Server-Sent Events at `/api/events` for live dashboard updates
 - `POST /api/ingest` for structured batches
 - `POST /api/boc/log` compatibility route for the existing BOC userscript relay
+- Server-to-server forwarding through the existing radar Discord bot
 - API-key-protected moderation updates at `PATCH /api/chat/:id/moderation`
 - Health metrics at `/api/status`
 - Ingest rate limiting, JSON size limits, CORS control, structured logs, graceful shutdown, and crash reporting
@@ -105,6 +106,8 @@ BOC_API_KEY=<long random admin key>
 LOG_LEVEL=info
 CORS_ORIGIN=https://www.geo-fs.com
 INGEST_REQUESTS_PER_MINUTE=240
+DISCORD_RELAY_URL=https://geofs-live-radar.onrender.com/api/boc/log
+DISCORD_RELAY_KEY=<same value as the radar BOC_RELAY_KEY>
 ```
 
 6. Attach persistent storage for `/home/container/data`. SQLite data is lost if the hosting volume is ephemeral.
@@ -112,6 +115,8 @@ INGEST_REQUESTS_PER_MINUTE=240
 8. Verify `https://your-host/api/status` returns `status: online` and `database: connected`.
 9. Configure the BOC userscript relay endpoint to `https://your-host/api/boc/log`. Do not put `BOC_API_KEY` in the userscript.
 10. Watch WispByte logs for JSON records such as `BOC GeoFS logger online`, `Chat messages stored`, and database errors.
+
+The Node logger does not create a second Discord bot. After SQLite accepts a new message, it forwards the structured record to `DISCORD_RELAY_URL`; the existing radar service validates `BOC_RELAY_KEY` and sends the embed through its already-configured Discord bot to channel `1497398101667745942`. Keep the relay key only in the two server environments, never in `boc.user.js`.
 
 ## Reliability and operations
 

@@ -14,6 +14,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
 const databasePath = path.resolve(process.env.DATABASE_PATH || path.join(__dirname, '..', 'data', 'boc-chat.sqlite'));
 const apiKey = process.env.BOC_API_KEY || '';
+const discordRelayUrl = process.env.DISCORD_RELAY_URL || '';
+const discordRelayKey = process.env.DISCORD_RELAY_KEY || '';
 const logger = createLogger(process.env.LOG_LEVEL || 'info');
 const db = openDatabase(databasePath);
 const repository = createRepository(db);
@@ -24,6 +26,32 @@ const ingestWindows = new Map();
 function publish(event) {
   const payload = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
   for (const response of sseClients) response.write(payload);
+  if (event.type === 'chat.message') forwardToRadarBot(event.data);
+}
+
+async function forwardToRadarBot(message) {
+  if (!discordRelayUrl) return;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (discordRelayKey) headers['X-BOC-Relay-Key'] = discordRelayKey;
+    const response = await fetch(discordRelayUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        type: 'chat',
+        username: message.callsign || 'GeoFS',
+        message: message.message,
+        timestamp: message.timestamp,
+        server: message.server,
+        uid: message.uid,
+        aircraftId: message.aircraftId,
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    logger.info({ messageId: message.id }, 'Chat message forwarded to existing Discord bot');
+  } catch (error) {
+    logger.error({ error: error.message, messageId: message.id }, 'Discord bot relay failed; message remains stored');
+  }
 }
 
 const collector = createCollector({ repository, publish, logger });
