@@ -46,6 +46,14 @@ Chat logging is persisted in `chat_logger_config.json` and sends blue embeds to 
 
 The parser supports chat lists exposed as `chat`, `messages`, or `chatMessages` and ignores unknown response shapes. It de-duplicates stable message IDs or content fingerprints and queues Discord delivery asynchronously.
 
+## BOC browser add-on
+
+BOC (BAF Operations Client) is a standalone Tampermonkey userscript for BAF personnel who want communications and operational awareness inside GeoFS. It provides the Chat Monitor, BAF Channel, Operations Feed, Active BAF Pilots, and Alert Console panels without requiring pilots to leave the flight session.
+
+Install [boc/boc.user.js](../boc/boc.user.js) in Tampermonkey. BOC captures chat data exposed to the logged-in browser client, keeps a searchable local session log, detects configured BAF tags, supports local mute and export tools, and stores configuration in browser `localStorage`. Relay delivery is disabled by default and accepts only explicitly configured HTTPS endpoints. BOC does not store credentials or perform server-side moderation.
+
+See [boc/README.md](../boc/README.md) for installation, relay configuration, privacy boundaries, and browser testing instructions.
+
 ## Wispbyte deployment
 
 Upload the contents of the nested `geofs-live-radar-main` application folder to Wispbyte. Use:
