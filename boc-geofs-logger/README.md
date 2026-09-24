@@ -1,6 +1,6 @@
 # BOC GeoFS Chat Logger
 
-A Node.js 20 service that persistently stores structured GeoFS multiplayer chat for the Belgian Operational Chat system.
+A Node.js 22.5+ service that persistently stores structured GeoFS multiplayer chat for the Belgian Operational Chat system.
 
 ## Important GeoFS limitation
 
@@ -93,9 +93,9 @@ Invoke-RestMethod -Method Patch http://127.0.0.1:3000/api/chat/42/moderation `
 
 ## WispByte deployment
 
-1. Create a Node.js server using Node 20 or newer.
+1. Create a Node.js server using Node 22.5 or newer. WispByte's Node 26 image is compatible.
 2. Upload this `boc-geofs-logger` directory or connect the Git repository.
-3. Set the install command to `npm install --omit=dev`.
+3. Set the startup command to `rm -rf node_modules package-lock.json && npm install --omit=dev && npm start`. The cleanup is needed once if the old `better-sqlite3` deployment already created `node_modules`; no native SQLite build step is required afterward.
 4. Set the startup command to `npm start`.
 5. Configure these environment variables in WispByte:
 

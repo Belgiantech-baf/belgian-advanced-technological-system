@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -27,9 +27,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_dedupe ON chat_messages(dedupe_key);
 
 export function openDatabase(databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const db = new Database(databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
+  const db = new DatabaseSync(databasePath);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   db.exec(schema);
   return db;
 }
@@ -59,7 +58,17 @@ export function createRepository(db) {
       (source_id, dedupe_key, timestamp, callsign, uid, aircraft_id, message, server, created_at)
     VALUES (@sourceId, @dedupeKey, @timestamp, @callsign, @uid, @aircraftId, @message, @server, @createdAt)
   `);
-  const insertMany = db.transaction((messages) => messages.map((message) => insert.run(message)));
+  const insertMany = (messages) => {
+    db.exec('BEGIN');
+    try {
+      const results = messages.map((message) => insert.run(message));
+      db.exec('COMMIT');
+      return results;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  };
   const count = db.prepare('SELECT COUNT(*) AS count FROM chat_messages');
   const last = db.prepare('SELECT timestamp FROM chat_messages ORDER BY id DESC LIMIT 1');
 
@@ -67,8 +76,8 @@ export function createRepository(db) {
     insertMany(messages) {
       const results = insertMany(messages);
       return {
-        count: results.reduce((total, result) => total + result.changes, 0),
-        keys: messages.filter((_message, index) => results[index].changes > 0).map((message) => message.dedupeKey),
+        count: results.reduce((total, result) => total + Number(result.changes), 0),
+        keys: messages.filter((_message, index) => Number(results[index].changes) > 0).map((message) => message.dedupeKey),
       };
     },
     list({ limit, offset = 0, q, callsign, uid, from, to }) {
