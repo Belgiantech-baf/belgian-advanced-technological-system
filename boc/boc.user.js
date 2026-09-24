@@ -48,6 +48,7 @@
     pilots: new Map(),
     messages: [],
     alerts: [],
+    domMessageKeys: new Set(),
     activePanel: 'chat',
     search: '',
     minimized: false,
@@ -148,6 +149,7 @@
       message: message.trim(),
       timestamp: raw.timestamp ?? raw.time ?? now(),
       server: String(raw.server ?? raw.room ?? raw.serverId ?? 'unknown'),
+      aircraftId: raw.aircraftId ?? raw.acid ?? null,
     };
   }
 
@@ -160,7 +162,7 @@
     state.messages = state.messages.slice(-300);
     addActivity('chat', message);
     if (isBafPilot(message)) {
-      state.pilots.set(message.username, { ...state.pilots.get(message.username), username: message.username, callsign: message.callsign, lastSeen: message.timestamp, server: message.server });
+      state.pilots.set(message.username, { ...state.pilots.get(message.username), username: message.username, callsign: message.callsign, aircraft: message.aircraftId || 'unknown', lastSeen: message.timestamp, server: message.server });
       addActivity('pilot-detected', { username: message.username, callsign: message.callsign, server: message.server });
     }
     if (message.category === 'red' || message.category === 'yellow') {
@@ -230,16 +232,39 @@
     };
   }
 
+  function geoFsUserForCallsign(callsign) {
+    const users = window.multiplayer?.users;
+    const values = Array.isArray(users) ? users : users && typeof users === 'object' ? Object.values(users) : [];
+    return values.find((user) => String(user.callsign ?? user.cs ?? '').trim().toLowerCase() === callsign.trim().toLowerCase()) || null;
+  }
+
+  function processGeoFsChatNode(node) {
+    const text = node.textContent?.trim();
+    if (!text || text.length > 1000) return;
+    const key = node.dataset?.bocMessageId || text;
+    if (state.domMessageKeys.has(key)) return;
+    state.domMessageKeys.add(key);
+    if (state.domMessageKeys.size > 500) state.domMessageKeys.delete(state.domMessageKeys.values().next().value);
+    const separator = text.indexOf(':');
+    const callsign = separator > 0 ? text.slice(0, separator).trim() : 'unknown';
+    const user = geoFsUserForCallsign(callsign);
+    processChat({
+      id: `dom:${key}`,
+      username: String(user?.username ?? user?.callsign ?? callsign),
+      callsign: String(user?.callsign ?? callsign),
+      message: separator > 0 ? text.slice(separator + 1).trim() : text,
+      timestamp: now(),
+      server: 'GeoFS DOM',
+      aircraftId: user?.acid ?? user?.id ?? null,
+    });
+  }
+
   function listenDomChat() {
-    const selectors = ['[class*="chat"]', '[id*="chat"]'];
-    const observer = new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => {
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
-      const element = node.matches?.(selectors.join(',')) ? node : node.querySelector?.(selectors.join(','));
-      if (!element) return;
-      const text = element.textContent?.trim();
-      if (text && text.length < 1000) processChat({ username: 'GeoFS', message: text, timestamp: now(), server: 'DOM' });
-    })));
+    const chatSelector = '#geofs-ui-3dview .geofs-chat-messages.geofs-authenticated';
+    const scan = () => document.querySelectorAll(chatSelector).forEach((container) => container.children && [...container.children].forEach(processGeoFsChatNode));
+    const observer = new MutationObserver(() => scan());
     observer.observe(document.documentElement, { childList: true, subtree: true });
+    scan();
   }
 
   const UI = {
