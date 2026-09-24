@@ -54,6 +54,10 @@ Install [boc/boc.user.js](../boc/boc.user.js) in Tampermonkey. BOC captures chat
 
 See [boc/README.md](../boc/README.md) for installation, relay configuration, privacy boundaries, and browser testing instructions.
 
+## 24/7 BOC chat logger
+
+The standalone Node.js service in [boc-geofs-logger](../boc-geofs-logger/README.md) provides SQLite persistence, REST search, moderation metadata, and an SSE live feed. GeoFS does not expose a documented server-to-server chat stream, so the service remains online independently of a personal computer but receives new public chat through an authorized BOC/GeoFS client relay. It never requires or stores passwords, cookies, or session tokens.
+
 ## Wispbyte deployment
 
 Upload the contents of the nested `geofs-live-radar-main` application folder to Wispbyte. Use:

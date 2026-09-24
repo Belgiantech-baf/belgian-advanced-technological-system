@@ -1,0 +1,21 @@
+{
+  "name": "boc-geofs-logger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Persistent SQLite logger and API for public GeoFS multiplayer chat relayed by BOC clients.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0"
+  }
+}
