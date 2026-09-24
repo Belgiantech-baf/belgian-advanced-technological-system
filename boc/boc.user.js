@@ -215,7 +215,7 @@
     if (!leftRail || state.panel) return;
     state.panel = document.createElement('ul');
     state.panel.id = 'boc-root';
-    state.panel.className = 'geofs-list geofs-toggle-panel geofs-stopMousePropagation geofs-stopKeyupPropagation boc-list';
+    state.panel.className = 'geofs-list geofs-toggle-panel geofs-preference-list geofs-stopMousePropagation geofs-stopKeyupPropagation boc-list';
     state.panel.dataset.noblur = 'true';
     leftRail.appendChild(state.panel);
     ['keydown', 'keyup', 'keypress', 'mousedown', 'mouseup', 'wheel'].forEach((eventName) => state.panel.addEventListener(eventName, (event) => event.stopPropagation()));
