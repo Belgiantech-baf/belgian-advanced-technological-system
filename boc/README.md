@@ -12,7 +12,7 @@ BOC is a Tampermonkey/User.js add-on for the GeoFS browser session. It provides 
 - Local BAF channel for notices, flight announcements, patrol coordination, and mission updates
 - Active BAF pilot tracking from chat and visible aircraft payloads
 - Local alerts, keyword highlighting, mute filters, watchlist-ready activity history, and event logging
-- Explicitly configured HTTPS relay endpoints, disabled by default
+- Explicitly configured HTTPS relay endpoint for the BATS Discord log channel
 - Dark/light mode, draggable and resizable window, minimize/restore control
 - LocalStorage configuration; no credentials or tokens are stored by BOC
 - Admin/server moderation is intentionally not implemented client-side. Local mute, watch, export, and review tools do not affect other pilots.
@@ -29,7 +29,7 @@ The script matches only GeoFS pages. It does not require an account, API token, 
 
 ## Relay configuration
 
-Relay delivery is opt-in. BOC sends only to endpoints explicitly stored in `localStorage` and only accepts HTTPS URLs. The current UI leaves endpoint management intentionally conservative; an approved endpoint can be added from the browser console with:
+BOC is configured to relay activity to the BATS server endpoint, which delivers through the server-side Discord bot to channel `1497398101667745942`. The Discord token stays on the server and is never placed in the userscript or browser storage. BOC sends only to endpoints explicitly stored in `localStorage` and only accepts HTTPS URLs. Additional approved endpoints can be added from the browser console with:
 
 ```js
 const config = JSON.parse(localStorage.getItem('boc.config.v1'));
@@ -38,7 +38,7 @@ config.relayEnabled = true;
 localStorage.setItem('boc.config.v1', JSON.stringify(config));
 ```
 
-Use an approved service that accepts the documented payload shape. BOC fails closed when an endpoint is unavailable and keeps the message in the local activity log.
+Use an approved service that accepts the documented payload shape. BOC fails closed when an endpoint is unavailable and keeps the message in the local activity log. The server returns `503` until its Discord bot is logged in and ready.
 
 ## Data and privacy
 

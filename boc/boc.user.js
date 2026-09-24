@@ -29,7 +29,7 @@
   const DEFAULT_CONFIG = {
     enabled: true,
     logging: true,
-    relayEnabled: false,
+    relayEnabled: true,
     filtersEnabled: true,
     darkMode: true,
     panel: { left: 18, top: 82, width: 430, height: 620 },
@@ -38,7 +38,7 @@
     authorizedPatterns: [],
     muteUsers: [],
     watchlist: [],
-    relayEndpoints: [],
+    relayEndpoints: [{ name: 'BATS Discord log channel', url: 'https://geofs-live-radar.onrender.com/api/boc/log', enabled: true }],
     channelName: 'BAF Operations',
   };
 
@@ -57,7 +57,12 @@
 
   function loadConfig() {
     try {
-      return merge(DEFAULT_CONFIG, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'));
+      const config = merge(DEFAULT_CONFIG, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'));
+      if (!config.relayEndpoints.length) {
+        config.relayEndpoints = [...DEFAULT_CONFIG.relayEndpoints];
+        config.relayEnabled = true;
+      }
+      return config;
     } catch (error) {
       console.warn('[BOC] Configuration reset:', error);
       return structuredClone(DEFAULT_CONFIG);
@@ -126,6 +131,7 @@
     state.log.push(entry);
     persistLog();
     console.debug('[BOC]', type, data);
+    if (!type.startsWith('relay-')) Relay.sendLog(entry);
     return entry;
   }
 
@@ -162,7 +168,6 @@
       state.alerts = state.alerts.slice(0, 100);
       addActivity('alert', { messageId: message.id, category: message.category });
     }
-    Relay.send(message);
     render();
   }
 
@@ -190,17 +195,17 @@
   }
 
   const Relay = {
-    async send(message) {
+    async sendLog(entry) {
       if (!state.config.relayEnabled || !state.config.relayEndpoints.length) return;
       const approved = state.config.relayEndpoints.filter((endpoint) => endpoint.enabled && /^https:\/\//i.test(endpoint.url));
       for (const endpoint of approved) {
         try {
-          addActivity('relay-attempt', { endpoint: endpoint.name || endpoint.url, messageId: message.id });
-          const response = await fetch(endpoint.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'BOC', channel: state.config.channelName, message }) });
+          addActivity('relay-attempt', { endpoint: endpoint.name || endpoint.url, messageId: entry.id });
+          const response = await fetch(endpoint.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'BOC', channel: state.config.channelName, ...entry }) });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          addActivity('relay-sent', { endpoint: endpoint.name || endpoint.url, messageId: message.id });
+          addActivity('relay-sent', { endpoint: endpoint.name || endpoint.url, messageId: entry.id });
         } catch (error) {
-          addActivity('relay-failed', { endpoint: endpoint.name || endpoint.url, messageId: message.id, error: String(error.message || error) });
+          addActivity('relay-failed', { endpoint: endpoint.name || endpoint.url, messageId: entry.id, error: String(error.message || error) });
           console.warn('[BOC] Relay unavailable; message retained locally.', error);
         }
       }

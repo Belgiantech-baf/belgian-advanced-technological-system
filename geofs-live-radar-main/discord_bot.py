@@ -132,9 +132,11 @@ class DiscordBotService:
     def notify_chat(self, chat_message):
         """Queue one deduplicated GeoFS chat record for Discord logging."""
         if not self.enabled or not self.loop or not self.ready:
-            return
+            logger.warning("[ERROR] Discord exception: chat log dropped because bot is not ready")
+            return False
         future = asyncio.run_coroutine_threadsafe(self._send_chat_log(chat_message), self.loop)
         future.add_done_callback(self._log_chat_result)
+        return True
 
     @staticmethod
     def _log_chat_result(future):

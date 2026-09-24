@@ -16,7 +16,7 @@ Features:
 - Advanced Search Filter
 """
 
-from flask import Flask, Response, make_response 
+from flask import Flask, Response, make_response, request 
 import requests 
 import os
 import json
@@ -89,6 +89,7 @@ SCRAMBLE_ROLE_ID = 1552339958021226607
 SCRAMBLE_CONFIG_PATH = Path(__file__).resolve().parent / "scramble_config.json"
 CHAT_LOG_CONFIG_PATH = Path(__file__).resolve().parent / "chat_logger_config.json"
 CHAT_LOG_CHANNEL_ID = 1497398101667745942
+BOC_LOG_MAX_LENGTH = 1800
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -576,6 +577,39 @@ def inspect_aircraft_feed(data):
 
 # ---------------- Flask / proxy ----------------
 app = Flask(__name__)
+
+
+@app.route("/api/boc/log", methods=["POST", "OPTIONS"])
+def receive_boc_log():
+  """Relay BOC activity to the server-side Discord bot without exposing credentials."""
+  if request.method == "OPTIONS":
+    response = make_response("", 204)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    return response
+
+  payload = request.get_json(silent=True)
+  if not isinstance(payload, dict):
+    return make_response(json.dumps({"error": "JSON object required"}), 400, {"Content-Type": "application/json"})
+  activity_type = str(payload.get("type", "activity"))[:64]
+  message = str(payload.get("message", "")).strip()
+  if not message:
+    details = {key: value for key, value in payload.items() if key not in {"id", "timestamp"}}
+    message = json.dumps(details, separators=(",", ":"))
+  message = f"[BOC:{activity_type}] {message}"[:BOC_LOG_MAX_LENGTH]
+  chat_message = {
+    "username": str(payload.get("username", "BOC Client"))[:128],
+    "message": message,
+    "timestamp": str(payload.get("timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))),
+    "server": str(payload.get("server", "GeoFS / BOC"))[:128],
+    "matched_filters": [],
+  }
+  if not discord_bot_service or not discord_bot_service.notify_chat(chat_message):
+    return make_response(json.dumps({"error": "Discord bot is not ready"}), 503, {"Content-Type": "application/json"})
+  response = make_response(json.dumps({"queued": True, "channel_id": CHAT_LOG_CHANNEL_ID}), 202, {"Content-Type": "application/json"})
+  response.headers["Access-Control-Allow-Origin"] = "*"
+  return response
 
 @app.route("/api/map", methods=["GET"])
 def proxy_map():
