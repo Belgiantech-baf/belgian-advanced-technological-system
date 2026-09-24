@@ -94,7 +94,7 @@ Invoke-RestMethod -Method Patch http://127.0.0.1:3000/api/chat/42/moderation `
 
 1. Create a Node.js server using Node 20 or newer.
 2. Upload this `boc-geofs-logger` directory or connect the Git repository.
-3. Set the install command to `npm ci --omit=dev`.
+3. Set the install command to `npm install --omit=dev`.
 4. Set the startup command to `npm start`.
 5. Configure these environment variables in WispByte:
 
