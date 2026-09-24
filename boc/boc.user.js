@@ -44,6 +44,7 @@
     messages: [],
     pilots: new Map(),
     activeTab: 'chat',
+    search: '',
     panel: null,
     button: null,
     unread: 0,
@@ -217,6 +218,7 @@
     state.panel.className = 'geofs-list geofs-toggle-panel geofs-stopMousePropagation geofs-stopKeyupPropagation boc-list';
     state.panel.dataset.noblur = 'true';
     leftRail.appendChild(state.panel);
+    ['keydown', 'keyup', 'keypress', 'mousedown', 'mouseup', 'wheel'].forEach((eventName) => state.panel.addEventListener(eventName, (event) => event.stopPropagation()));
     render();
   }
 
