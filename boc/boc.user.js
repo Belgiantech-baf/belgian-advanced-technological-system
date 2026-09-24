@@ -10,6 +10,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_download
 // @grant        GM_notification
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
@@ -54,6 +55,7 @@
     minimized: false,
     panel: null,
     startedAt: Date.now(),
+    lastMultiplayerBatch: '',
   };
 
   function loadConfig() {
@@ -138,15 +140,17 @@
 
   function normalizeMessage(raw) {
     if (!raw || typeof raw !== 'object') return null;
-    const message = raw.message ?? raw.content ?? raw.text ?? raw.body;
+    let message = raw.message ?? raw.msg ?? raw.content ?? raw.text ?? raw.body;
     if (typeof message !== 'string' || !message.trim()) return null;
+    try { message = decodeURIComponent(message); } catch (_) { /* already decoded */ }
     const username = String(raw.username ?? raw.user ?? raw.name ?? raw.callsign ?? 'unknown').trim();
     const callsign = String(raw.callsign ?? raw.cs ?? username).trim();
     return {
-      id: String(raw.id ?? raw.messageId ?? `${username}|${message}|${raw.timestamp ?? raw.time ?? ''}`),
+      id: String(raw.id ?? raw.messageId ?? `${raw.uid ?? ''}|${raw.acid ?? ''}|${callsign}|${message}`),
       username,
       callsign,
       message: message.trim(),
+      userId: raw.userId ?? raw.uid ?? '',
       timestamp: raw.timestamp ?? raw.time ?? now(),
       server: String(raw.server ?? raw.room ?? raw.serverId ?? 'unknown'),
       aircraftId: raw.aircraftId ?? raw.acid ?? null,
@@ -196,6 +200,28 @@
     }
   }
 
+  function pageScope() {
+    return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  }
+
+  function inspectMultiplayerChat() {
+    const multiplayer = pageScope().multiplayer;
+    const messages = multiplayer?.lastRequest?.chatMessages;
+    if (!Array.isArray(messages) || !messages.length) return;
+    const batchSignature = messages.map((message) => `${message.id ?? ''}|${message.uid ?? ''}|${message.acid ?? ''}|${message.cs ?? ''}|${message.msg ?? ''}`).join('\n');
+    if (batchSignature === state.lastMultiplayerBatch) return;
+    state.lastMultiplayerBatch = batchSignature;
+    messages.forEach((message) => processChat({
+      ...message,
+      id: message.id ?? `${message.uid ?? ''}|${message.acid ?? ''}|${message.cs ?? ''}|${message.msg ?? ''}`,
+      callsign: message.cs,
+      message: message.msg,
+      userId: message.uid,
+      aircraftId: message.acid,
+      server: message.server ?? 'GeoFS multiplayer',
+    }));
+  }
+
   const Relay = {
     async sendLog(entry) {
       if (!state.config.relayEnabled || !state.config.relayEndpoints.length) return;
@@ -233,7 +259,7 @@
   }
 
   function geoFsUserForCallsign(callsign) {
-    const users = window.multiplayer?.users;
+    const users = pageScope().multiplayer?.users;
     const values = Array.isArray(users) ? users : users && typeof users === 'object' ? Object.values(users) : [];
     return values.find((user) => String(user.callsign ?? user.cs ?? '').trim().toLowerCase() === callsign.trim().toLowerCase()) || null;
   }
@@ -265,6 +291,11 @@
     const observer = new MutationObserver(() => scan());
     observer.observe(document.documentElement, { childList: true, subtree: true });
     scan();
+  }
+
+  function startMultiplayerLogger() {
+    window.setInterval(inspectMultiplayerChat, 500);
+    console.info('[BOC] Structured GeoFS chat polling enabled: multiplayer.lastRequest.chatMessages');
   }
 
   const UI = {
@@ -341,6 +372,15 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function exposeLoggerApi() {
+    pageScope().GeoFSChatLogger = {
+      getLogs: () => [...state.log],
+      clear: () => { state.log = []; persistLog(); render(); console.info('[BOC] GeoFS chat log cleared.'); },
+      export: exportLog,
+      scan: inspectMultiplayerChat,
+    };
+  }
+
   function makeDraggable(panel) {
     let drag = null;
     panel.addEventListener('pointerdown', (event) => {
@@ -373,6 +413,8 @@
   function start() {
     hookNetwork();
     listenDomChat();
+    startMultiplayerLogger();
+    exposeLoggerApi();
     if (document.body) mount(); else window.addEventListener('DOMContentLoaded', mount, { once: true });
     console.info('[BOC] Started. Local logging=%s relay=%s', state.config.logging, state.config.relayEnabled);
   }

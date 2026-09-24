@@ -7,6 +7,7 @@ BOC is a Tampermonkey/User.js add-on for the GeoFS browser session. It provides 
 ## Included capabilities
 
 - GeoFS chat capture through JSON `fetch`/XHR responses plus the authenticated GeoFS chat DOM (`.geofs-chat-messages.geofs-authenticated`)
+- Structured multiplayer capture from `multiplayer.lastRequest.chatMessages`, including callsign, message, GeoFS user ID, and aircraft ID
 - Search-ready local session history and JSON export
 - Green, blue, yellow, orange, and red message categories based on configurable tags
 - Local BAF channel for notices, flight announcements, patrol coordination, and mission updates
@@ -54,6 +55,15 @@ node .\boc\test_boc.js
 ```
 
 The browser-side adapters should then be tested in a GeoFS session by confirming that incoming chat appears in **Chat Monitor**, tagged messages appear in **Alert Console**, a `[BAF]` user appears in **Active BAF Pilots**, callsigns match visible `multiplayer.users` records when available, and **Export log** downloads JSON. BOC does not embed the external iframe used by older chat snippets; it keeps the panel and relay in the current GeoFS client.
+
+The browser console also exposes the compatibility API:
+
+```js
+GeoFSChatLogger.getLogs();
+GeoFSChatLogger.export();
+GeoFSChatLogger.clear();
+GeoFSChatLogger.scan();
+```
 
 ## Limitations
 
