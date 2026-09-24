@@ -27,11 +27,23 @@
     { tag: '[TRAINING]', category: 'blue' },
     { tag: '[BAF]', category: 'blue' },
   ];
+  const CHAT_FILTER_COLORS = {
+    RAF: 'pink', UAC: 'red', USSR: 'yellow', UAEAF: 'magenta', RNZAF: 'lightgreen',
+    USAF: 'cyan', SHL: '#5A5AFC', RNLAF: 'orange', AEF: '#C8F94A', U: 'lightcoral',
+    UTP: 'lightcoral', P: 'lightcoral', PMC: 'lightcoral',
+  };
+  const CHAT_FILTER_KEYWORDS = [
+    '[U]', '[UTP]', '[P]', '[PMC]', '[NKG-KG]', '[SHL]', '[NFS]', '[AEF]', '[WANK]', '[NIUF]', '[RNLAF]', '[RNZAF]', '[USAF]', '[RAAF]',
+    '[TUAF]', '[TASC]', '[UAC]', '[UAEAF]', '[USSR]', '[BAF]', '[PAF]', '[JASDF]', '[RAF]',
+    '(U)', '(UTP)', '(P)', '(NKG-KG)', '(PMC)', '(RNLAF)', '(AEF)', '(RNZAF)', '(SHL)', '(NFS)', '(RAAF)', '(USAF)', '(TUAF)', '(JASDF)',
+    '(TASC)', '(UAC)', '(UAEAF)', '(USSR)', '(BAF)', '(WANK)', '(NIUF)', '(PAF)', '(RAF)',
+  ];
   const DEFAULT_CONFIG = {
     enabled: true,
     logging: true,
     relayEnabled: true,
     filtersEnabled: true,
+    chatFilterEnabled: true,
     darkMode: true,
     panel: { left: 18, top: 82, width: 430, height: 620 },
     tags: ['[BAF]', '[OPS]', '[ALERT]', '[TRAINING]', '[ADMIN]'],
@@ -293,9 +305,48 @@
   function listenDomChat() {
     const chatSelector = '#geofs-ui-3dview .geofs-chat-messages.geofs-authenticated';
     const scan = () => document.querySelectorAll(chatSelector).forEach((container) => container.children && [...container.children].forEach(processGeoFsChatNode));
-    const observer = new MutationObserver(() => scan());
+    const observer = new MutationObserver((records) => {
+      records.forEach((record) => record.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.matches?.('.geofs-chat-message')) applyChatFilter(node);
+      }));
+      scan();
+      reprocessChatFilter();
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     scan();
+    reprocessChatFilter();
+  }
+
+  function applyChatFilter(messageElement) {
+    const label = messageElement.querySelector('b.label');
+    if (!label) return;
+    const callsign = label.getAttribute('callsign') || '';
+    if (!state.config.chatFilterEnabled) {
+      label.style.display = '';
+      label.style.color = '';
+      messageElement.style.color = '';
+      return;
+    }
+    if (label.classList.contains('myself')) {
+      label.style.display = '';
+      label.style.color = '#8ec5ff';
+      messageElement.style.color = '';
+      return;
+    }
+    const keyword = CHAT_FILTER_KEYWORDS.find((value) => callsign.toUpperCase().includes(value.toUpperCase()));
+    if (keyword) {
+      const colorKey = keyword.replace(/[\[\]\(\)]/g, '');
+      label.style.display = '';
+      label.style.color = CHAT_FILTER_COLORS[colorKey] || '#d3d3d3';
+      messageElement.style.color = '';
+    } else {
+      label.style.display = 'none';
+      messageElement.style.color = '#555';
+    }
+  }
+
+  function reprocessChatFilter() {
+    document.querySelectorAll('.geofs-chat-message').forEach(applyChatFilter);
   }
 
   function startMultiplayerLogger() {
@@ -332,7 +383,7 @@
   function empty(text) { return `<div class="boc-empty">${escapeHtml(text)}</div>`; }
 
   function settingsView() {
-    return `<div class="boc-settings"><label><input type="checkbox" data-setting="logging" ${state.config.logging ? 'checked' : ''}> Local activity logging</label><label><input type="checkbox" data-setting="relayEnabled" ${state.config.relayEnabled ? 'checked' : ''}> Enable configured relay endpoints</label><label><input type="checkbox" data-setting="filtersEnabled" ${state.config.filtersEnabled ? 'checked' : ''}> Color-coded tag filters</label><label>BAF tags<input data-setting="tags" value="${escapeHtml(state.config.tags.join(', '))}"></label><label>Squadron tags<input data-setting="squadronTags" value="${escapeHtml(state.config.squadronTags.join(', '))}"></label><label>Authorized callsign patterns<input data-setting="authorizedPatterns" value="${escapeHtml(state.config.authorizedPatterns.join(', '))}"></label><label>Muted users<input data-setting="muteUsers" value="${escapeHtml(state.config.muteUsers.join(', '))}"></label><label>Approved HTTPS relay URLs<input id="boc-relays" value="${escapeHtml(state.config.relayEndpoints.map((endpoint) => endpoint.url).join(', '))}"></label><div class="boc-setting-actions"><button data-action="save-relays">Save relay URLs</button><button data-action="export">Export JSON</button><button data-action="clear-log">Clear activity</button><button data-action="theme">Toggle theme</button></div><p class="boc-safety">Relays are off by default. Only HTTPS endpoints explicitly added to local settings are used. No credentials are stored by BOC.</p></div>`;
+    return `<div class="boc-settings"><label><input type="checkbox" data-setting="logging" ${state.config.logging ? 'checked' : ''}> Local activity logging</label><label><input type="checkbox" data-setting="relayEnabled" ${state.config.relayEnabled ? 'checked' : ''}> Enable configured relay endpoints</label><label><input type="checkbox" data-setting="filtersEnabled" ${state.config.filtersEnabled ? 'checked' : ''}> Color-coded BOC categories</label><label><input type="checkbox" data-setting="chatFilterEnabled" ${state.config.chatFilterEnabled ? 'checked' : ''}> GeoFS callsign filter</label><label>BAF tags<input data-setting="tags" value="${escapeHtml(state.config.tags.join(', '))}"></label><label>Squadron tags<input data-setting="squadronTags" value="${escapeHtml(state.config.squadronTags.join(', '))}"></label><label>Authorized callsign patterns<input data-setting="authorizedPatterns" value="${escapeHtml(state.config.authorizedPatterns.join(', '))}"></label><label>Muted users<input data-setting="muteUsers" value="${escapeHtml(state.config.muteUsers.join(', '))}"></label><label>Approved HTTPS relay URLs<input id="boc-relays" value="${escapeHtml(state.config.relayEndpoints.map((endpoint) => endpoint.url).join(', '))}"></label><div class="boc-setting-actions"><button data-action="save-relays">Save relay URLs</button><button data-action="export">Export JSON</button><button data-action="clear-log">Clear activity</button><button data-action="theme">Toggle theme</button></div><p class="boc-safety">Relay delivery uses the configured server endpoint and existing radar Discord bot. No credentials are stored in BOC.</p></div>`;
   }
 
   function render() {
