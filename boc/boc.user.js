@@ -407,6 +407,7 @@
       window.setTimeout(mountGeoFsButton, 500);
       return;
     }
+    mount();
     if (document.getElementById('boc-button')) return;
     const button = document.createElement('button');
     button.id = 'boc-button';
@@ -417,9 +418,15 @@
     button.title = 'BAF Operations Client';
     button.innerHTML = '<span class="boc-button-mark">BOC</span><span class="boc-unread" hidden aria-hidden="true"></span>';
     button.addEventListener('click', () => {
+      const wasVisible = state.panel?.classList.contains('geofs-visible');
       state.unread = 0;
       updateButton();
-      window.setTimeout(render, 0);
+      window.setTimeout(() => {
+        if (state.panel && state.panel.classList.contains('geofs-visible') === wasVisible) {
+          state.panel.classList.toggle('geofs-visible', !wasVisible);
+        }
+        render();
+      }, 0);
     });
     bottomBar.appendChild(button);
     updateButton();
