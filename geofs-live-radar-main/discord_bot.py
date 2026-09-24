@@ -107,13 +107,16 @@ class DiscordBotService:
     def notify_event(self, event, aircraft_id, aircraft):
         """Queue an entry/exit event for asynchronous delivery."""
         if not self.enabled:
+            logger.warning("[ERROR] Discord exception: bot disabled; event dropped event=%s aircraft_id=%s", event, aircraft_id)
             return
 
+        logger.info("[DEBUG] Alert queued event=%s aircraft_id=%s", event, aircraft_id)
         item = (event, str(aircraft_id), dict(aircraft))
         with self.pending_lock:
             self.pending_events.append(item)
 
         if self.loop and self.ready:
+            logger.info("[DEBUG] Alert worker started event=%s aircraft_id=%s", event, aircraft_id)
             asyncio.run_coroutine_threadsafe(self._flush_events(), self.loop)
 
     def notify_scramble(self, aircraft_id, aircraft, matched_tag):
@@ -218,6 +221,7 @@ class DiscordBotService:
         @self.bot.event
         async def on_ready():
             self.loop = asyncio.get_running_loop()
+            logger.info("[DEBUG] Bot startup report generated")
             logger.info(
                 "Bot connected: username=%s bot_id=%s connected_guilds=%s",
                 self.bot.user,
@@ -252,7 +256,7 @@ class DiscordBotService:
                 except discord.DiscordException:
                     logger.exception("Discord API error while resolving channel: %s", self.channel_id)
                     return
-            logger.info("Channel resolved: channel_id=%s", channel.id)
+            logger.info("[DEBUG] Channel resolved channel_id=%s channel_name=%s guild_count=%s", channel.id, getattr(channel, 'name', 'unknown'), len(self.bot.guilds))
             member = None
             if getattr(channel, "guild", None) is not None:
                 member = channel.guild.get_member(self.bot.user.id)
@@ -452,6 +456,30 @@ class DiscordBotService:
             embed.add_field(name="Currently inside zone", value=str(values["inside"]), inline=True)
             await ctx.send(embed=embed)
 
+        @self.bot.command(name="testalert")
+        @staff_only()
+        async def testalert(ctx):
+            started = time.perf_counter()
+            embed = discord.Embed(
+                title="✅ Discord Test Alert",
+                color=discord.Color.green(),
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(name="Bot Status", value="Operational", inline=True)
+            embed.add_field(name="Channel Status", value=f"#{ctx.channel.name}", inline=True)
+            embed.add_field(name="Timestamp", value=datetime.now(timezone.utc).isoformat(), inline=False)
+            try:
+                await ctx.send(embed=embed)
+                latency_ms = (time.perf_counter() - started) * 1000
+                logger.info("[DEBUG] Embed sent latency_ms=%.2f channel_id=%s", latency_ms, ctx.channel.id)
+                await ctx.send(f"Test alert delivered in {latency_ms:.2f} ms.")
+            except discord.Forbidden:
+                logger.error("[ERROR] Discord exception: bot lacks permission to send message in channel_id=%s", ctx.channel.id)
+                await ctx.send("Test alert failed: missing permission to send messages or embeds.")
+            except discord.HTTPException:
+                logger.exception("[ERROR] Discord exception while sending test alert")
+                await ctx.send("Test alert failed: Discord HTTP error.")
+
         @self.bot.command(name="help")
         async def help_command(ctx):
             embed = self._base_embed("Available commands")
@@ -464,6 +492,7 @@ class DiscordBotService:
                 "`!scramble on/off/status` - control scramble monitoring\n"
                 "`!chatlog on/off/status` - control GeoFS chat logging\n"
                 "`!chatfilter add/remove/list` - manage chat keyword filters\n"
+                "`!testalert` - send a live Discord delivery test\n"
                 "`!help` - show this command list"
             )
             await ctx.send(embed=embed)

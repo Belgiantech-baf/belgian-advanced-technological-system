@@ -331,7 +331,16 @@ def post_discord_alert(payload, aircraft_id, event):
 
 
 def queue_discord_alert(event, aircraft_id, aircraft):
-  if TEST_MODE or not DISCORD_WEBHOOK_URL or (discord_bot_service and getattr(discord_bot_service, "enabled", False)):
+  logger.info("[DEBUG] Alert generated event=%s aircraft_id=%s", event, aircraft_id)
+  bot_active = bool(discord_bot_service and getattr(discord_bot_service, "enabled", False))
+  if TEST_MODE:
+    logger.info("[DEBUG] Alert queued but dropped: TEST_MODE is enabled")
+    return
+  if bot_active:
+    logger.info("[DEBUG] Alert queued for bot delivery: Bot mode is active; webhook delivery is bypassed.")
+    return
+  if not DISCORD_WEBHOOK_URL:
+    logger.error("[ERROR] Discord exception: DISCORD_WEBHOOK_URL is empty; webhook delivery is disabled")
     return
 
   payload = (
@@ -346,6 +355,7 @@ def queue_discord_alert(event, aircraft_id, aircraft):
     f"Altitude: {aircraft['altitude']} ft\n"
     f"Timestamp: {aircraft['timestamp']}"
   )
+  logger.info("[DEBUG] Alert queued for webhook worker event=%s aircraft_id=%s", event, aircraft_id)
   notification_executor.submit(post_discord_alert, payload, aircraft_id, event)
 
 
