@@ -54,6 +54,7 @@
     search: '',
     minimized: false,
     panel: null,
+    unread: 0,
     startedAt: Date.now(),
     lastMultiplayerBatch: '',
   };
@@ -164,6 +165,10 @@
     message.category = categoryFor(message);
     state.messages.push(message);
     state.messages = state.messages.slice(-300);
+    if (!state.panel || state.panel.style.display === 'none') {
+      state.unread += 1;
+      updateButton();
+    }
     addActivity('chat', message);
     if (isBafPilot(message)) {
       state.pilots.set(message.username, { ...state.pilots.get(message.username), username: message.username, callsign: message.callsign, aircraft: message.aircraftId || 'unknown', lastSeen: message.timestamp, server: message.server });
@@ -379,6 +384,47 @@
       export: exportLog,
       scan: inspectMultiplayerChat,
     };
+    pageScope().BOC = { togglePanel };
+  }
+
+  function updateButton() {
+    const button = document.getElementById('boc-button');
+    if (!button) return;
+    const indicator = button.querySelector('.boc-unread');
+    if (indicator) indicator.hidden = state.unread === 0;
+    button.setAttribute('aria-label', state.unread ? `BOC Chat, ${state.unread} unread messages` : 'BOC Chat');
+  }
+
+  function togglePanel() {
+    const wasClosed = !state.panel;
+    if (wasClosed) mount();
+    if (!state.panel) return;
+    const opening = wasClosed || state.panel.style.display === 'none';
+    state.panel.style.display = opening ? 'block' : 'none';
+    if (opening) {
+      state.unread = 0;
+      updateButton();
+      render();
+    }
+  }
+
+  function mountGeoFsButton() {
+    const bottomBar = document.querySelector('.geofs-ui-bottom');
+    if (!bottomBar) {
+      window.setTimeout(mountGeoFsButton, 500);
+      return;
+    }
+    if (document.getElementById('boc-button')) return;
+    const button = document.createElement('button');
+    button.id = 'boc-button';
+    button.type = 'button';
+    button.className = 'mdl-button mdl-js-button geofs-f-standard-ui geofs-mediumScreenOnly';
+    button.setAttribute('data-tooltip-classname', 'mdl-tooltip--top');
+    button.title = 'BAF Operations Client';
+    button.innerHTML = '<span class="boc-button-mark">BOC</span><span class="boc-unread" hidden aria-hidden="true"></span>';
+    button.addEventListener('click', togglePanel);
+    bottomBar.appendChild(button);
+    updateButton();
   }
 
   function makeDraggable(panel) {
@@ -402,20 +448,21 @@
     state.panel.id = 'boc-root';
     Object.assign(state.panel.style, { left: `${state.config.panel.left}px`, top: `${state.config.panel.top}px`, width: `${state.config.panel.width}px`, height: `${state.config.panel.height}px` });
     document.body.appendChild(state.panel);
+    state.panel.style.display = 'block';
     makeDraggable(state.panel);
     render();
     if (typeof GM_registerMenuCommand === 'function') GM_registerMenuCommand('Open BOC', () => { if (!state.panel) mount(); });
   }
 
   const CSS = `
-#boc-root{position:fixed;z-index:2147483647;min-width:320px;min-height:300px;resize:both;overflow:hidden;font:13px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;color:#e7edf5}#boc-root *{box-sizing:border-box}.boc-shell{height:100%;background:#111820;border:1px solid #344454;border-radius:10px;box-shadow:0 18px 50px #0008;display:flex;flex-direction:column;overflow:hidden}.boc-shell.light{background:#f4f6f8;color:#17232d;border-color:#b6c2ce}.boc-titlebar{height:42px;padding:0 12px;background:linear-gradient(100deg,#0d2835,#173c4c);display:flex;align-items:center;justify-content:space-between;cursor:move}.light .boc-titlebar{background:#dbe6eb}.boc-titlebar strong{font-size:14px}.boc-titlebar strong span{font-weight:400;opacity:.66;margin-left:4px}.boc-titlebar button,.boc-panel button,.boc-shell footer button{border:0;background:transparent;color:inherit;cursor:pointer;padding:4px 7px;font-size:14px}.boc-status{height:28px;padding:6px 12px;color:#9cb1bd;font-size:11px;display:flex;gap:10px}.boc-status span{margin-left:auto}.boc-status span+span{margin-left:0}.boc-dot{display:inline-block;width:7px;height:7px;background:#63d391;border-radius:50%;box-shadow:0 0 8px #63d391;vertical-align:middle;margin-right:5px}nav{display:flex;gap:2px;padding:0 8px;border-bottom:1px solid #293744;overflow:auto}.boc-tab{white-space:nowrap;color:#91a3af;background:transparent;border:0;border-bottom:2px solid transparent;padding:9px 7px;font-size:11px;cursor:pointer}.boc-tab.active{color:#d8f4f3;border-bottom-color:#52c4bd}main{flex:1;overflow:auto;padding:9px}.boc-message{border-left:3px solid #63d391;background:#19232c;margin-bottom:6px;padding:8px 9px;border-radius:0 5px 5px 0}.light .boc-message{background:#e6ebef}.boc-message.blue{border-color:#5ca9ff}.boc-message.yellow{border-color:#e5c55f}.boc-message.orange{border-color:#ee965a}.boc-message.red{border-color:#ec6d78}.boc-message-meta{display:flex;gap:7px;align-items:baseline}.boc-message-meta span{color:#72aeb4;font-size:11px}.boc-message-meta time{margin-left:auto;color:#71828d;font-size:10px}.boc-message p{margin:3px 0;color:inherit;word-break:break-word}.boc-message small{color:#71828d}.boc-empty{padding:36px 12px;text-align:center;color:#71828d}.boc-channel-head{display:flex;justify-content:space-between;border-bottom:1px solid #293744;padding:6px 2px 10px}.boc-channel-head span{font-size:10px;color:#71828d}.boc-channel textarea{width:100%;height:62px;background:#18232c;color:inherit;border:1px solid #344454;border-radius:5px;margin:10px 0 5px;padding:8px;resize:vertical}.boc-primary{background:#2d8c88!important;color:#fff!important;border-radius:4px;padding:7px 10px!important}.boc-log-row,.boc-pilot{display:flex;gap:8px;align-items:center;padding:8px;border-bottom:1px solid #293744}.boc-log-row time,.boc-pilot time{color:#71828d;font-size:10px}.boc-log-row b{color:#75c5bd;font-size:11px}.boc-pilot div{flex:1}.boc-pilot span{display:block;color:#8297a3;font-size:11px}.boc-settings{display:grid;gap:12px}.boc-settings label{display:grid;gap:5px;color:#b4c4cc}.boc-settings input:not([type=checkbox]){background:#18232c;color:inherit;border:1px solid #344454;border-radius:4px;padding:7px}.boc-setting-actions{display:flex;gap:5px;flex-wrap:wrap}.boc-setting-actions button,.boc-shell footer button{background:#263744;border-radius:4px;color:inherit}.boc-safety{font-size:11px;color:#81939d;border-left:2px solid #e5c55f;padding-left:8px}.boc-shell footer{padding:7px 10px;border-top:1px solid #293744;color:#81939d;font-size:11px;display:flex;justify-content:space-between}.is-minimized .boc-status,.is-minimized nav,.is-minimized main,.is-minimized footer{display:none}.is-minimized{height:42px!important;min-height:42px!important}`;
+#boc-button{position:relative}.boc-button-mark{display:inline-flex;align-items:center;justify-content:center;height:30px;min-width:34px;padding:0 5px;border:2px solid currentColor;border-radius:3px;font-weight:800;letter-spacing:.05em;color:#52c4bd}.boc-unread{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#ef6974;box-shadow:0 0 6px #ef6974}#boc-root{position:fixed;z-index:2147483647;min-width:320px;min-height:300px;resize:both;overflow:hidden;font:13px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;color:#e7edf5}#boc-root *{box-sizing:border-box}.boc-shell{height:100%;background:#111820;border:1px solid #344454;border-radius:10px;box-shadow:0 18px 50px #0008;display:flex;flex-direction:column;overflow:hidden}.boc-shell.light{background:#f4f6f8;color:#17232d;border-color:#b6c2ce}.boc-titlebar{height:42px;padding:0 12px;background:linear-gradient(100deg,#0d2835,#173c4c);display:flex;align-items:center;justify-content:space-between;cursor:move}.light .boc-titlebar{background:#dbe6eb}.boc-titlebar strong{font-size:14px}.boc-titlebar strong span{font-weight:400;opacity:.66;margin-left:4px}.boc-titlebar button,.boc-panel button,.boc-shell footer button{border:0;background:transparent;color:inherit;cursor:pointer;padding:4px 7px;font-size:14px}.boc-status{height:28px;padding:6px 12px;color:#9cb1bd;font-size:11px;display:flex;gap:10px}.boc-status span{margin-left:auto}.boc-status span+span{margin-left:0}.boc-dot{display:inline-block;width:7px;height:7px;background:#63d391;border-radius:50%;box-shadow:0 0 8px #63d391;vertical-align:middle;margin-right:5px}nav{display:flex;gap:2px;padding:0 8px;border-bottom:1px solid #293744;overflow:auto}.boc-tab{white-space:nowrap;color:#91a3af;background:transparent;border:0;border-bottom:2px solid transparent;padding:9px 7px;font-size:11px;cursor:pointer}.boc-tab.active{color:#d8f4f3;border-bottom-color:#52c4bd}main{flex:1;overflow:auto;padding:9px}.boc-message{border-left:3px solid #63d391;background:#19232c;margin-bottom:6px;padding:8px 9px;border-radius:0 5px 5px 0}.light .boc-message{background:#e6ebef}.boc-message.blue{border-color:#5ca9ff}.boc-message.yellow{border-color:#e5c55f}.boc-message.orange{border-color:#ee965a}.boc-message.red{border-color:#ec6d78}.boc-message-meta{display:flex;gap:7px;align-items:baseline}.boc-message-meta span{color:#72aeb4;font-size:11px}.boc-message-meta time{margin-left:auto;color:#71828d;font-size:10px}.boc-message p{margin:3px 0;color:inherit;word-break:break-word}.boc-message small{color:#71828d}.boc-empty{padding:36px 12px;text-align:center;color:#71828d}.boc-channel-head{display:flex;justify-content:space-between;border-bottom:1px solid #293744;padding:6px 2px 10px}.boc-channel-head span{font-size:10px;color:#71828d}.boc-channel textarea{width:100%;height:62px;background:#18232c;color:inherit;border:1px solid #344454;border-radius:5px;margin:10px 0 5px;padding:8px;resize:vertical}.boc-primary{background:#2d8c88!important;color:#fff!important;border-radius:4px;padding:7px 10px!important}.boc-log-row,.boc-pilot{display:flex;gap:8px;align-items:center;padding:8px;border-bottom:1px solid #293744}.boc-log-row time,.boc-pilot time{color:#71828d;font-size:10px}.boc-log-row b{color:#75c5bd;font-size:11px}.boc-pilot div{flex:1}.boc-pilot span{display:block;color:#8297a3;font-size:11px}.boc-settings{display:grid;gap:12px}.boc-settings label{display:grid;gap:5px;color:#b4c4cc}.boc-settings input:not([type=checkbox]){background:#18232c;color:inherit;border:1px solid #344454;border-radius:4px;padding:7px}.boc-setting-actions{display:flex;gap:5px;flex-wrap:wrap}.boc-setting-actions button,.boc-shell footer button{background:#263744;border-radius:4px;color:inherit}.boc-safety{font-size:11px;color:#81939d;border-left:2px solid #e5c55f;padding-left:8px}.boc-shell footer{padding:7px 10px;border-top:1px solid #293744;color:#81939d;font-size:11px;display:flex;justify-content:space-between}.is-minimized .boc-status,.is-minimized nav,.is-minimized main,.is-minimized footer{display:none}.is-minimized{height:42px!important;min-height:42px!important}`;
 
   function start() {
     hookNetwork();
     listenDomChat();
     startMultiplayerLogger();
     exposeLoggerApi();
-    if (document.body) mount(); else window.addEventListener('DOMContentLoaded', mount, { once: true });
+    if (document.body) mountGeoFsButton(); else window.addEventListener('DOMContentLoaded', mountGeoFsButton, { once: true });
     console.info('[BOC] Started. Local logging=%s relay=%s', state.config.logging, state.config.relayEnabled);
   }
 
