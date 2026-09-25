@@ -1,993 +1,298 @@
 // ==UserScript==
-// @name         BOC Client
-// @namespace    https://github.com/Belgiantech-baf/geofs-live-radar
-// @version      4.0.0
-// @description  BAF Operations Client sidebar for GeoFS clients.
+// @name         BOC - BAF Operations Client
+// @namespace    https://github.com/Belgiantech-baf/belgian-advanced-technological-system
+// @version      3.0.0
+// @description  BAF Operations Client: native-style GeoFS communications, monitoring, operations, and local moderation.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
-// @run-at       document-idle
+// @run-at       document-start
+// @grant        GM_download
 // @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const STORAGE_KEY = 'boc.geofs.sidebar.v1';
-  const SERVER_URL_KEY = 'boc.server.url';
-  const SECTION_LIST = ['Dashboard', 'BAF Chat', 'Mini Radar', 'Active BAF Pilots', 'Operations', 'Alerts', 'Logs', 'Settings'];
-
-  const defaultSettings = {
-    bafChat: true,
-    radar: true,
-    alerts: true,
-    tracking: true,
-    darkMode: true,
-    compactMode: false
+  const CONFIG_KEY = 'BOC_SETTINGS';
+  const LEGACY_CONFIG_KEY = 'boc.config.v2';
+  const LOG_KEY = 'boc.activity.v2';
+  const MAX_LOG = 2500;
+  const MAX_MESSAGES = 500;
+  const DEFAULT_RELAY = 'https://geofs-live-radar.onrender.com/api/boc/log';
+  const BAF_IDENTIFIERS = ['BAF', '[BAF]', '(BAF)', '[UGRP]'];
+  const MODULES = [
+    ['communications', 'Communications'], ['chat', 'Chat Monitor'], ['baf', 'BAF Channel'], ['network', 'BAF Network'],
+    ['operations', 'Operations'], ['alerts', 'Alerts'], ['logging', 'Logging'], ['settings', 'Settings'],
+  ];
+  const DEFAULT_KEYWORDS = ['alert', 'scramble', 'emergency', 'intercept', 'training', 'baf'];
+  const DEFAULT_CONFIG = {
+    enabled: true, commsEnabled: true, overlayEnabled: true, operationsEnabled: true, relayEnabled: false,
+    relayUrl: DEFAULT_RELAY, loggerEnabled: true, saveChat: true, bafOnly: false, highlightTraffic: true,
+    tags: ['[BAF]', '[OPS]', '[ALERT]', '[TRAINING]', '[ADMIN]'], mutedUsers: [], watchList: [],
+    keywords: DEFAULT_KEYWORDS, alerts: { bafUser: true, multipleBaf: true, mission: true, important: true, operations: true },
+    theme: 'dark', darkMode: true, compact: false, draggable: true, resizable: true, opacity: 100, fontSize: 13,
+    window: { top: 72, right: 18, width: 460, height: 680 }, debug: false, performance: false, eventMonitor: false, websocketMonitor: false,
+  };
+  const state = {
+    config: loadConfig(), logs: loadLogs(), messages: [], pilots: new Map(), alerts: [], missions: [], moderation: [],
+    tab: null, query: '', panel: null, button: null, unread: 0, lastBatch: '', seen: new Set(), connected: false,
+    processed: 0, alertCount: 0, lastHeartbeat: null, startedAt: Date.now(),
+    diagnostics: { geofs: false, toolbar: false, multiplayer: false, chat: false, overlay: false }, stages: new Set(), ready: false,
   };
 
-  function readState() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      return {
-        section: saved.section || 'Dashboard',
-        open: !!saved.open,
-        theme: saved.theme || 'dark',
-        filters: Object.assign({ radar: 'All', chat: '#operations' }, saved.filters || {}),
-        settings: Object.assign({}, defaultSettings, saved.settings || {}),
-        width: 360
-      };
-    } catch (error) {
-      return {
-        section: 'Dashboard',
-        open: false,
-        theme: 'dark',
-        filters: { radar: 'All', chat: '#operations' },
-        settings: Object.assign({}, defaultSettings),
-        width: 360
-      };
+  function page() { return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window; }
+  function merge(base, value) { const result = { ...base, ...value }; Object.keys(base).forEach((key) => { if (base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) result[key] = { ...base[key], ...(value?.[key] || {}) }; }); return result; }
+  function loadConfig() { try { return merge(DEFAULT_CONFIG, JSON.parse(localStorage.getItem(CONFIG_KEY) || localStorage.getItem(LEGACY_CONFIG_KEY) || '{}')); } catch { return merge({}, DEFAULT_CONFIG); } }
+  function loadLogs() { try { const value = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); return Array.isArray(value) ? value.slice(-MAX_LOG) : []; } catch { return []; } }
+  function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config)); }
+  function saveLogs() { state.logs = state.logs.slice(-MAX_LOG); localStorage.setItem(LOG_KEY, JSON.stringify(state.logs)); }
+  function now() { return new Date().toISOString(); }
+  function uid() { return crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`; }
+  function esc(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }
+  function download(name, content, type) { const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); if (typeof GM_download === 'function') GM_download({ url, name, saveAs: true }); else { const link = document.createElement('a'); link.href = url; link.download = name; link.click(); } setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  function setting(name, fallback) { return state.config[name] === undefined ? fallback : state.config[name]; }
+  function panelDimensions() { const width = Number(state.config.window?.width); const height = Number(state.config.window?.height); return { width: width >= 320 ? width : DEFAULT_CONFIG.window.width, height: height >= 300 ? height : DEFAULT_CONFIG.window.height }; }
+  function log(message, error) { if (error) console.error(`[BOC ERROR] ${message}`, error); else console.info(`[BOC] ${message}`); }
+  function stage(number) { state.stages.add(number); log(`Stage ${number} complete`); }
+  function safeRun(label, callback) { try { return callback(); } catch (error) { log(label, error); return null; } }
+  function geo() { return page(); }
+  function diagnosticRows() { return Object.entries({ geofs: 'GeoFS Loaded', toolbar: 'Toolbar Found', multiplayer: 'Multiplayer Found', chat: 'Chat Found', overlay: 'Overlay Active' }).map(([key, label]) => `<div class="boc-diagnostic"><span class="${state.diagnostics[key] ? 'ok' : 'fail'}"></span>${label}<b>${state.diagnostics[key] ? 'PASS' : 'WAITING'}</b></div>`).join(''); }
+  async function waitForGeoFS() {
+    const started = Date.now();
+    while (Date.now() - started < 30000) {
+      const root = geo();
+      const toolbar = findToolbar();
+      if ((root && (root.geofs || root.ui || root.multiplayer || root.flight)) || toolbar) {
+        state.diagnostics.geofs = Boolean(root?.geofs || root?.ui || root?.multiplayer || root?.flight || toolbar);
+        return root || window;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    throw new Error('GeoFS readiness timeout after 30 seconds');
+  }
+  async function waitForSelector(selector, timeout = 30000) {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const element = document.querySelector(selector);
+      if (element) return element;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return null;
   }
 
-  const state = readState();
-
-  function saveState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        section: state.section,
-        open: state.open,
-        theme: state.theme,
-        filters: state.filters,
-        settings: state.settings,
-        width: state.width
-      }));
-    } catch (error) {
-      // ignore storage errors
-    }
+  function record(type, data = {}) {
+    const entry = { id: uid(), type, timestamp: now(), ...data };
+    if (state.config.loggerEnabled) { state.logs.push(entry); saveLogs(); }
+    if (state.config.relayEnabled && !type.startsWith('relay-')) relay(entry);
+    return entry;
+  }
+  function alertUser(type, data = {}) { const entry = record('alert', { alertType: type, ...data }); state.alerts.unshift(entry); state.alerts = state.alerts.slice(0, 100); state.alertCount += 1; render(); }
+  async function relay(entry) {
+    if (!/^https:\/\//i.test(state.config.relayUrl || '')) return;
+    try { const response = await fetch(state.config.relayUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'BOC', channel: 'BAF Operations', ...entry }) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); } catch (error) { if (state.config.debug) console.warn('[BOC] relay failed', error); }
   }
 
-  function escapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
-      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char];
+  function normalize(raw) {
+    const text = raw?.msg ?? raw?.message ?? raw?.content ?? raw?.text;
+    if (typeof text !== 'string' || !text.trim()) return null;
+    let message; try { message = decodeURIComponent(text).trim(); } catch { message = text.trim(); }
+    const callsign = String(raw.cs ?? raw.callsign ?? raw.username ?? 'unknown').trim();
+    return { id: String(raw.id ?? raw.messageId ?? `${raw.uid ?? ''}|${raw.acid ?? ''}|${callsign}|${message}`), callsign, uid: raw.uid ?? raw.userId ?? null, aircraftId: raw.acid ?? raw.aircraftId ?? null, message, timestamp: raw.timestamp ?? now(), server: raw.server ?? 'GeoFS' };
+  }
+  function classify(message) { const value = message.toUpperCase(); if (value.includes('[ADMIN]') || value.includes('[ALERT]') || /\b(emergency|scramble)\b/i.test(value)) return 'red'; if (value.includes('[OPS]') || value.includes('[MISSION]')) return 'yellow'; if (value.includes('[BAF]') || value.includes('[TRAINING]')) return 'blue'; if (state.config.keywords.some((word) => value.includes(word.toUpperCase()))) return 'orange'; return 'green'; }
+  function isBaf(callsign) { const value = String(callsign || '').toUpperCase(); return BAF_IDENTIFIERS.some((identifier) => value.includes(identifier)) || state.config.tags.some((tag) => value.includes(String(tag).toUpperCase())); }
+  function upsertPilot(raw, source = 'GeoFS') {
+    const callsign = String(raw?.cs ?? raw?.callsign ?? raw?.username ?? raw?.name ?? '').trim();
+    if (!callsign || !isBaf(callsign)) return false;
+    state.pilots.set(callsign, { callsign, username: String(raw?.username ?? raw?.name ?? callsign), uid: raw?.uid ?? raw?.userId ?? null, aircraft: raw?.acid ?? raw?.aircraftId ?? raw?.aircraft ?? null, lastSeen: raw?.timestamp ?? now(), server: raw?.server ?? source, officer: /officer|admin/i.test(callsign) });
+    return true;
+  }
+  function keywordHit(message) { return state.config.keywords.some((word) => new RegExp(`\\b${String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(message)); }
+  function receive(raw) {
+    const message = normalize(raw); if (!message || state.seen.has(message.id)) return;
+    if (state.config.mutedUsers.some((user) => user.toLowerCase() === message.callsign.toLowerCase())) return;
+    state.seen.add(message.id); if (state.seen.size > 5000) state.seen.delete(state.seen.values().next().value);
+    message.category = classify(message.message); message.baf = isBaf(message.callsign); message.keyword = keywordHit(message.message);
+    state.messages.push(message); state.messages = state.messages.slice(-MAX_MESSAGES); state.processed += 1; state.lastHeartbeat = Date.now(); state.connected = true;
+    record('chat', message);
+    if (message.baf) { upsertPilot(message, message.server); record('baf-detection', { callsign: message.callsign, uid: message.uid }); if (state.config.alerts.bafUser) alertUser('BAF User Detected', { callsign: message.callsign }); }
+    if (message.category === 'red' && state.config.alerts.operations) alertUser('Operations Alert', { callsign: message.callsign, message: message.message });
+    if (keywordHit(message.message)) state.moderation.unshift({ action: 'Keyword highlight', callsign: message.callsign, message: message.message, timestamp: now() });
+    if (!isOpen()) state.unread += 1; updateButton(); render();
+  }
+  function poll() {
+    safeRun('pilot tracking failed', () => {
+      const root = geo();
+      const multiplayer = root?.multiplayer;
+      state.diagnostics.multiplayer = Boolean(multiplayer);
+      if (!multiplayer) return;
+      const messages = multiplayer.lastRequest?.chatMessages;
+      if (Array.isArray(messages) && messages.length) { const signature = messages.map((item) => `${item.id ?? ''}|${item.uid ?? ''}|${item.acid ?? ''}|${item.cs ?? ''}|${item.msg ?? ''}`).join('\n'); if (signature !== state.lastBatch) { state.lastBatch = signature; messages.forEach(receive); } }
+      const users = multiplayer.users ?? multiplayer.lastRequest?.users ?? [];
+      const userList = Array.isArray(users) ? users : Object.values(users || {});
+      userList.forEach((user) => upsertPilot(user, 'GeoFS'));
     });
   }
 
-  function getServerUrl() {
-    try {
-      return localStorage.getItem(SERVER_URL_KEY) || 'https://geofs-live-radar.onrender.com/api/boc/log';
-    } catch (error) {
-      return 'https://geofs-live-radar.onrender.com/api/boc/log';
-    }
+  function applyFilter(element) {
+    const label = element.querySelector?.('b.label'); if (!label) return;
+    if (!setting('callsignFilter', true)) { label.style.display = ''; element.style.display = ''; return; }
+    const callsign = label.getAttribute('callsign') || ''; const match = isBaf(callsign) || state.config.tags.some((tag) => callsign.toUpperCase().includes(tag.toUpperCase()));
+    label.style.display = match ? '' : 'none'; element.style.opacity = match ? '1' : '.35';
   }
-
-  function getWindowBats() {
-    const root = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    return root.BATS || root.BOC?.app?.bats || root.BOC?.Adapter?.BATS || null;
+  function chatRecordFromElement(element) {
+    const label = element.querySelector?.('b.label, .label, [callsign]');
+    const messageNode = element.querySelector?.('.message, .text, .content, p');
+    const callsign = label?.getAttribute?.('callsign') || label?.textContent?.trim() || element.getAttribute?.('data-callsign') || 'unknown';
+    const message = messageNode?.textContent?.trim() || element.getAttribute?.('data-message') || element.textContent?.replace(callsign, '').trim();
+    if (!message) return null;
+    return { id: element.id || element.getAttribute?.('data-message-id') || `${callsign}|${message}`, cs: callsign, msg: message, timestamp: element.getAttribute?.('data-timestamp') || now(), server: 'GeoFS DOM' };
   }
+  function captureChatElement(element) { safeRun('chat message capture failed', () => { if (!element?.matches?.('.geofs-chat-message')) return; applyFilter(element); const raw = chatRecordFromElement(element); if (raw) receive(raw); }); }
+  function installChatObserver() { safeRun('chat hooks failed', () => { const chatSelector = '.geofs-chat-message'; const existing = document.querySelectorAll?.(chatSelector) || []; existing.forEach(captureChatElement); if (typeof MutationObserver !== 'function' || !document.documentElement) return; const observer = new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => { if (node.nodeType === 1) { if (node.matches?.(chatSelector)) captureChatElement(node); node.querySelectorAll?.(chatSelector).forEach(captureChatElement); } }))); observer.observe(document.documentElement, { childList: true, subtree: true }); state.diagnostics.chat = Boolean(document.querySelector('.geofs-chat-message, .geofs-chat-messages')); }); }
 
-  function getBatsSnapshot() {
-    const bats = getWindowBats();
-    const pilots = bats && typeof bats.getActivePilots === 'function' ? bats.getActivePilots() : [];
-    const alerts = bats && typeof bats.getAlerts === 'function' ? bats.getAlerts() : [];
-    const operations = bats && typeof bats.getOperations === 'function' ? bats.getOperations() : [];
-    return {
-      connected: Boolean(bats),
-      pilots: Array.isArray(pilots) ? pilots : [],
-      alerts: Array.isArray(alerts) ? alerts : [],
-      operations: Array.isArray(operations) ? operations : [],
-      status: bats ? 'BATS CONNECTED' : 'BATS DISCONNECTED'
-    };
+  function isOpen() { return Boolean(state.panel?.classList.contains('geofs-visible')); }
+  function updateButton() { if (!state.button) return; const badge = state.button.querySelector('.boc-unread'); if (badge) badge.hidden = !state.unread; state.button.title = state.unread ? `BOC (${state.unread} unread)` : 'BAF Operations Client'; }
+  function visibleMessages() { return state.messages.filter((item) => (!state.config.bafOnly || item.baf) && (!state.query || `${item.callsign} ${item.message}`.toLowerCase().includes(state.query.toLowerCase()))).slice().reverse(); }
+  function toggle(name, label) { return `<label class="boc-switch"><input type="checkbox" data-setting="${name}" ${setting(name, false) ? 'checked' : ''}><span></span>${label}</label>`; }
+  function row(item) { return `<article class="boc-row ${item.category}"><header><b>${esc(item.callsign)}</b><time>${esc(new Date(item.timestamp).toLocaleTimeString())}</time></header><p>${esc(item.message)}</p><small>${esc(item.server)}${item.keyword ? ' Â· keyword' : ''}</small></article>`; }
+  function stat(label, value) { return `<div class="boc-stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`; }
+  function renderTabs() { return MODULES.map(([id, label]) => `<button class="boc-tab ${state.tab === id ? 'active' : ''}" data-tab="${id}">${label}</button>`).join(''); }
+  function content() {
+    if (state.tab === 'communications') return `<section class="boc-stats">${stat('Network', state.connected ? 'Connected' : 'Disconnected')}${stat('Active pilots', state.pilots.size)}${stat('Processed', state.processed)}</section>${toggle('commsEnabled', 'Enable BAF Communications')}${toggle('overlayEnabled', 'Enable BAF Channel Overlay')}${toggle('operationsEnabled', 'Enable Operations Feed')}${toggle('relayEnabled', 'Enable Relay System')}<p class="boc-muted">Last heartbeat: ${state.lastHeartbeat ? new Date(state.lastHeartbeat).toLocaleTimeString() : 'Waiting'}</p>`;
+    if (state.tab === 'chat') return `<div class="boc-toolbar"><input data-query placeholder="Search chat" value="${esc(state.query)}"><button data-action="export-csv">Export</button><button data-action="clear-chat">Clear</button></div>${toggle('loggerEnabled', 'Enable GeoFS Chat Logger')}${toggle('saveChat', 'Save Chat Log')}${toggle('bafOnly', 'Show BAF Messages Only')}${toggle('highlightTraffic', 'Highlight Operational Traffic')}<div class="boc-tags">${state.config.tags.map((tag) => `<button data-tag="${esc(tag)}" class="selected">${esc(tag)}</button>`).join('')}</div>${visibleMessages().map(row).join('') || '<div class="boc-empty">Waiting for GeoFS chat</div>'}`;
+    if (state.tab === 'baf') return `<div class="boc-section-title">BAF Channel</div><p class="boc-muted">Local BAF-only view of public GeoFS chat traffic.</p><div class="boc-toolbar"><input data-query placeholder="Search BAF traffic" value="${esc(state.query)}"><button data-action="clear-chat">Clear</button></div>${visibleMessages().filter((item) => item.baf).map(row).join('') || '<div class="boc-empty">No BAF traffic detected</div>'}`;
+    if (state.tab === 'network') return `<div class="boc-toolbar"><select data-network-filter><option>Show all</option><option>Show BAF only</option><option>Show officers</option><option>Show training flights</option></select></div>${[...state.pilots.values()].map((pilot) => `<article class="boc-item"><b>${esc(pilot.username || pilot.callsign)}</b><span>${esc(pilot.callsign)} Â· ${esc(pilot.aircraft ?? 'Unknown aircraft')} Â· ${esc(pilot.server)} Â· last seen ${esc(new Date(pilot.lastSeen).toLocaleTimeString())}</span></article>`).join('') || '<div class="boc-empty">No BAF pilots detected</div>'}`;
+    if (state.tab === 'operations') return `<div class="boc-section-title">Mission bulletin board</div>${state.missions.map((mission) => `<details class="boc-notice" open><summary>${esc(mission.title)} <small>${esc(mission.timestamp)}</small></summary><p>${esc(mission.message)}</p></details>`).join('') || '<div class="boc-empty">No current missions or notices</div>'}`;
+    if (state.tab === 'moderation') return '<div class="boc-section-title">Local review tools</div><label>Keywords<input data-setting="keywords" value="' + esc(state.config.keywords.join(', ')) + '"></label><label>Mute list<input data-setting="mutedUsers" value="' + esc(state.config.mutedUsers.join(', ')) + '"></label><label>Watch list<input data-setting="watchList" value="' + esc(state.config.watchList.join(', ')) + '"></label>' + (state.moderation.slice(0, 30).map((item) => '<article class="boc-item"><b>' + esc(item.action) + '</b><span>' + esc(item.callsign) + ' - ' + esc(item.message) + '</span></article>').join('') || '<div class="boc-empty">No moderation activity</div>');
+    if (state.tab === 'logging') return `<section class="boc-stats">${stat('Messages processed', state.processed)}${stat('Alerts generated', state.alertCount)}${stat('BAF users detected', state.pilots.size)}</section><button data-action="export-json">Export JSON</button><button data-action="export-csv">Export CSV</button><button data-action="clear-logs">Clear Logs</button>${state.logs.slice().reverse().slice(0, 80).map((item) => `<article class="boc-item"><b>${esc(item.type)}</b><span>${esc(item.callsign || item.message || item.alertType || '')} Â· ${esc(new Date(item.timestamp).toLocaleTimeString())}</span></article>`).join('')}`;
+    if (state.tab === 'alerts') return '<div class="boc-section-title">Alert settings</div>' + Object.entries({ bafUser: 'BAF User Detected', multipleBaf: 'Multiple BAF Members Online', mission: 'Mission Notice', important: 'Important Communication', operations: 'Operations Alert' }).map(([key, label]) => '<label class="boc-switch"><input type="checkbox" data-setting="alert-' + key + '" ' + (state.config.alerts[key] ? 'checked' : '') + '><span></span>' + label + '</label>').join('') + '<div class="boc-section-title">Recent Alerts</div>' + (state.alerts.map((item) => '<article class="boc-item"><b>' + esc(item.alertType) + '</b><span>' + esc(item.callsign || 'BOC') + ' - ' + esc(new Date(item.timestamp).toLocaleTimeString()) + '</span></article>').join('') || '<div class="boc-empty">No recent alerts</div>');
+    if (state.tab === 'settings') return `${toggle('darkMode', 'Dark Mode')}${toggle('compact', 'Compact Mode')}${toggle('draggable', 'Draggable Windows')}${toggle('resizable', 'Resizable Windows')}<label>Opacity<input type="range" min="60" max="100" data-setting="opacity" value="${esc(state.config.opacity)}"></label><label>Font size<input type="range" min="11" max="18" data-setting="fontSize" value="${esc(state.config.fontSize)}"></label><label>Theme<select data-setting="theme"><option value="dark" ${state.config.theme === 'dark' ? 'selected' : ''}>Dark</option><option value="light" ${state.config.theme === 'light' ? 'selected' : ''}>Light</option></select></label><div class="boc-section-title">BOC Diagnostics</div>${diagnosticRows()}<div class="boc-section-title">Advanced</div>${toggle('debug', 'Debug logging')}${toggle('performance', 'Performance monitor')}${toggle('eventMonitor', 'Event monitor')}${toggle('websocketMonitor', 'WebSocket monitor')}<button data-action="export-config">Export config</button><button data-action="import-config">Import config</button><button data-action="reset">Reset BOC</button><p class="boc-muted">BOC v3.0.0 - Belgian Tech - uptime ${Math.floor((Date.now() - state.startedAt) / 1000)}s</p>`;
+    return '<div class="boc-empty">Select a BOC module</div>';
   }
-
-  async function relayToServer(type, payload) {
-    const url = getServerUrl();
-    if (!url) return;
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type,
-          source: 'GeoFS-BOC',
-          channel: 'operations',
-          timestamp: Date.now(),
-          ...payload
-        })
-      });
-      if (!response.ok) {
-        throw new Error('HTTP ' + response.status);
-      }
-    } catch (error) {
-      // intentionally silent; server can be offline without crashing BOC
-    }
+  function render() { if (!state.panel) return; state.panel.innerHTML = `<div class="boc-shell ${state.config.theme} ${state.config.compact ? 'compact' : ''}" style="opacity:${state.config.opacity / 100};font-size:${state.config.fontSize}px"><header class="boc-head"><div><b>BAF Operations Client (BOC)</b><small>Belgian Tech Systems</small></div><button data-action="minimize" aria-label="Minimize">_</button><button data-action="close" aria-label="Close">X</button></header><nav>${renderTabs()}</nav><main>${content()}</main><footer>${state.messages.length} messages - ${state.pilots.size} BAF pilots</footer></div>`; bind(); }
+  function setArray(key, value) { state.config[key] = value.split(',').map((item) => item.trim()).filter(Boolean); }
+  function bind() {
+    state.panel.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => { state.tab = button.dataset.tab; state.config.activeTab = state.tab; saveConfig(); render(); }));
+    state.panel.querySelector('[data-query]')?.addEventListener('input', (event) => { state.query = event.target.value; render(); });
+    state.panel.querySelectorAll('[data-setting]').forEach((input) => input.addEventListener('change', () => { const key = input.dataset.setting; if (key === 'keywords' || key === 'mutedUsers' || key === 'watchList') setArray(key, input.value); else if (key.startsWith('alert-')) state.config.alerts[key.slice(6)] = input.checked; else state.config[key] = input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value; saveConfig(); render(); }));
+    state.panel.querySelector('[data-action="close"]')?.addEventListener('click', close);
+    state.panel.querySelector('[data-action="minimize"]')?.addEventListener('click', () => state.panel.classList.toggle('boc-minimized'));
+    state.panel.querySelector('[data-action="clear-chat"]')?.addEventListener('click', () => { state.messages = []; render(); });
+    state.panel.querySelector('[data-action="clear-logs"]')?.addEventListener('click', () => { state.logs = []; saveLogs(); render(); });
+    state.panel.querySelector('[data-action="export-json"]')?.addEventListener('click', () => download('boc-logs.json', JSON.stringify(state.logs, null, 2), 'application/json'));
+    state.panel.querySelectorAll('[data-action="export-csv"]').forEach((button) => button.addEventListener('click', () => download('boc-logs.csv', ['timestamp,type,callsign,message', ...state.logs.map((item) => [item.timestamp, item.type, item.callsign, item.message].map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(','))].join('\n'), 'text/csv')));
+    state.panel.querySelector('[data-action="export-config"]')?.addEventListener('click', () => download('boc-config.json', JSON.stringify(state.config, null, 2), 'application/json'));
+    state.panel.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.config = merge({}, DEFAULT_CONFIG); saveConfig(); render(); });
   }
-
-  function buildCss() {
-    return `
-      :root {
-        --boc-geo-panel-bg: rgba(14, 18, 24, 0.96);
-        --boc-geo-panel-alt: rgba(21, 27, 35, 0.95);
-        --boc-geo-border: rgba(141, 163, 190, 0.2);
-        --boc-geo-text: #edf5ff;
-        --boc-geo-text-soft: #afc2d8;
-        --boc-geo-blue: #5ea9ff;
-        --boc-geo-green: #46d39d;
-        --boc-geo-yellow: #f1c66a;
-        --boc-geo-orange: #ffb266;
-        --boc-geo-red: #ff7f7f;
-        --boc-geo-purple: #b29afc;
-      }
-
-      .geofs-ui-left {
-        position: relative;
-        overflow: visible;
-      }
-
-      #boc-module-button {
-        position: relative;
-        z-index: 50;
-        margin: 0 8px;
-        min-width: 96px;
-        height: 32px;
-        padding: 0 12px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.05em;
-        cursor: pointer;
-      }
-
-      .boc-native-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-width: 96px;
-        color: var(--boc-geo-text);
-        background: rgba(20, 28, 36, 0.94);
-        border: 1px solid rgba(190, 205, 221, 0.16);
-        border-radius: 8px;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
-        line-height: 1;
-      }
-
-      .boc-native-button .material-icons {
-        font-size: 18px;
-        line-height: 1;
-      }
-
-      .boc-native-button:hover {
-        background: rgba(30, 38, 48, 0.97);
-      }
-
-      .boc-native-button.active {
-        background: rgba(94, 169, 255, 0.18);
-        border-color: rgba(94, 169, 255, 0.4);
-        box-shadow: inset 0 0 0 1px rgba(94, 169, 255, 0.18), 0 0 0 1px rgba(94, 169, 255, 0.12);
-      }
-
-      .boc-native-panel {
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 340px;
-        max-width: 86vw;
-        display: flex;
-        flex-direction: column;
-        background: var(--boc-geo-panel-bg);
-        border-right: 1px solid var(--boc-geo-border);
-        border-left: 1px solid rgba(255,255,255,0.04);
-        color: var(--boc-geo-text);
-        font-family: "Segoe UI", Arial, sans-serif;
-        box-shadow: 8px 0 22px rgba(0, 0, 0, 0.28);
-        transform: translateX(-104%);
-        transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-        z-index: 3;
-        pointer-events: auto;
-      }
-
-      .boc-native-panel.open {
-        transform: translateX(0);
-      }
-
-      .boc-native-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px 10px;
-        border-bottom: 1px solid var(--boc-geo-border);
-        background: rgba(22, 29, 37, 0.96);
-      }
-
-      .boc-native-brand {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 0;
-      }
-
-      .boc-native-mark {
-        width: 30px;
-        height: 30px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #6caefe, #8ae7d0);
-        color: #0d1a25;
-        font-weight: 800;
-        letter-spacing: 0.04em;
-        font-size: 10px;
-      }
-
-      .boc-native-title {
-        font-size: 12px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        font-weight: 800;
-      }
-
-      .boc-native-subtitle {
-        font-size: 10px;
-        color: var(--boc-geo-text-soft);
-      }
-
-      .boc-native-close {
-        appearance: none;
-        border: 1px solid rgba(255,255,255,0.12);
-        background: rgba(255,255,255,0.04);
-        color: var(--boc-geo-text);
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        cursor: pointer;
-      }
-
-      .boc-native-nav {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 6px;
-        padding: 8px;
-        border-bottom: 1px solid var(--boc-geo-border);
-        background: rgba(12, 17, 22, 0.92);
-      }
-
-      .boc-native-nav button {
-        appearance: none;
-        border: 1px solid transparent;
-        background: transparent;
-        color: var(--boc-geo-text);
-        border-radius: 7px;
-        padding: 8px 10px;
-        font-size: 11px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: background 0.15s ease, border-color 0.15s ease;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-
-      .boc-native-nav button.active {
-        background: rgba(94, 169, 255, 0.13);
-        border-color: rgba(94, 169, 255, 0.42);
-        box-shadow: inset 0 0 0 1px rgba(94, 169, 255, 0.18);
-      }
-
-      .boc-native-content {
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(120, 150, 181, 0.5) transparent;
-      }
-
-      .boc-native-content::-webkit-scrollbar {
-        width: 8px;
-      }
-
-      .boc-native-content::-webkit-scrollbar-thumb {
-        background: rgba(120, 150, 181, 0.45);
-        border-radius: 999px;
-      }
-
-      .boc-native-section {
-        display: grid;
-        gap: 12px;
-      }
-
-      .boc-native-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .boc-native-stat,
-      .boc-native-card,
-      .boc-native-chat-item,
-      .boc-native-list-item,
-      .boc-native-row,
-      .boc-native-matrix {
-        background: linear-gradient(180deg, rgba(29, 38, 47, 0.9), rgba(18, 22, 28, 0.96));
-        border: 1px solid var(--boc-geo-border);
-        border-radius: 10px;
-      }
-
-      .boc-native-stat,
-      .boc-native-card {
-        padding: 10px 12px;
-      }
-
-      .boc-native-stat-label {
-        font-size: 9px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--boc-geo-text-soft);
-        margin-bottom: 6px;
-      }
-
-      .boc-native-stat-value {
-        font-size: 18px;
-        font-weight: 700;
-      }
-
-      .boc-native-card h3,
-      .boc-native-card h4 {
-        margin: 0 0 10px;
-        font-size: 10px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--boc-geo-text-soft);
-      }
-
-      .boc-native-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .boc-native-list-item,
-      .boc-native-chat-item,
-      .boc-native-row {
-        padding: 8px 10px;
-      }
-
-      .boc-native-list-item,
-      .boc-native-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .boc-native-chat-item {
-        display: grid;
-        gap: 5px;
-      }
-
-      .boc-native-chat-meta {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        color: var(--boc-geo-text-soft);
-        font-size: 10px;
-      }
-
-      .boc-native-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid var(--boc-geo-border);
-        font-size: 9px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        white-space: nowrap;
-      }
-
-      .boc-native-badge.green { background: rgba(70, 211, 157, 0.12); color: var(--boc-geo-green); }
-      .boc-native-badge.blue { background: rgba(94, 169, 255, 0.12); color: var(--boc-geo-blue); }
-      .boc-native-badge.yellow { background: rgba(241, 198, 106, 0.12); color: var(--boc-geo-yellow); }
-      .boc-native-badge.orange { background: rgba(255, 178, 102, 0.12); color: var(--boc-geo-orange); }
-      .boc-native-badge.red { background: rgba(255, 127, 127, 0.12); color: var(--boc-geo-red); }
-      .boc-native-badge.purple { background: rgba(178, 154, 252, 0.12); color: var(--boc-geo-purple); }
-
-      .boc-native-channel,
-      .boc-native-search,
-      .boc-native-button-row,
-      .boc-native-select {
-        width: 100%;
-        box-sizing: border-box;
-      }
-
-      .boc-native-channel,
-      .boc-native-search,
-      .boc-native-select {
-        background: rgba(9, 13, 18, 0.86);
-        border: 1px solid var(--boc-geo-border);
-        border-radius: 8px;
-        color: var(--boc-geo-text);
-        padding: 8px 10px;
-      }
-
-      .boc-native-button-row {
-        background: rgba(94, 169, 255, 0.12);
-        border: 1px solid rgba(94, 169, 255, 0.28);
-        border-radius: 8px;
-        color: var(--boc-geo-text);
-        padding: 8px 10px;
-        cursor: pointer;
-      }
-
-      .boc-native-message-layout {
-        display: grid;
-        grid-template-columns: 120px 1fr;
-        gap: 10px;
-      }
-
-      .boc-native-chat-list,
-      .boc-native-member-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .boc-native-channel-item,
-      .boc-native-member-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 8px 8px;
-        border-radius: 8px;
-        border: 1px solid var(--boc-geo-border);
-        background: rgba(10, 15, 20, 0.8);
-      }
-
-      .boc-native-unread {
-        min-width: 18px;
-        height: 18px;
-        border-radius: 999px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(94, 169, 255, 0.18);
-        color: var(--boc-geo-blue);
-        font-size: 9px;
-        font-weight: 700;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-
-      th, td {
-        padding: 7px 6px;
-        border-bottom: 1px solid rgba(141, 163, 190, 0.12);
-        text-align: left;
-      }
-
-      th {
-        color: var(--boc-geo-text-soft);
-        font-size: 9px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .boc-native-empty {
-        color: var(--boc-geo-text-soft);
-        font-size: 12px;
-      }
-
-      @media (max-width: 700px) {
-        .boc-native-panel {
-          width: min(84vw, 340px);
-        }
-      }
-    `;
-  }
-
-  function injectCss() {
-    if (document.getElementById('boc-native-geo-styles')) {
-      return;
-    }
-
-    const style = document.createElement('style');
-    style.id = 'boc-native-geo-styles';
-    style.type = 'text/css';
-    style.textContent = buildCss();
-    document.head.appendChild(style);
-  }
-
-  function renderDashboard() {
-    return `
-      <div class="boc-native-section">
-        <div class="boc-native-grid">
-          <div class="boc-native-stat"><div class="boc-native-stat-label">Members</div><div class="boc-native-stat-value">42</div></div>
-          <div class="boc-native-stat"><div class="boc-native-stat-label">Server</div><div class="boc-native-stat-value">BATS</div></div>
-          <div class="boc-native-stat"><div class="boc-native-stat-label">Ops</div><div class="boc-native-stat-value">Nominal</div></div>
-          <div class="boc-native-stat"><div class="boc-native-stat-label">Alerts</div><div class="boc-native-stat-value">03</div></div>
-        </div>
-
-        <div class="boc-native-card">
-          <h3>Mission Board</h3>
-          <div class="boc-native-list">
-            <div class="boc-native-list-item"><div><strong>Operation Atlas</strong><br><small>North Corridor</small></div><span class="boc-native-badge green">Live</span></div>
-            <div class="boc-native-list-item"><div><strong>Training Squadron 7</strong><br><small>Bravo Range</small></div><span class="boc-native-badge yellow">Queued</span></div>
-            <div class="boc-native-list-item"><div><strong>Intel Sweep</strong><br><small>Metro Sector</small></div><span class="boc-native-badge orange">Monitoring</span></div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderBafChat() {
-    const channels = [
-      { name: '#operations', unread: 0 },
-      { name: '#training', unread: 0 },
-      { name: '#intel', unread: 0 },
-      { name: '#admin', unread: 0 }
-    ];
-
-    const bats = getBatsSnapshot();
-    const members = bats.pilots.slice(0, 4).map(function (pilot) {
-      return { name: escapeHtml(pilot.username || pilot.callsign || 'Unknown'), role: escapeHtml(pilot.group || pilot.status || 'member') };
-    });
-
-    const history = [
-      { user: 'BOC', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), msg: bats.connected ? 'BOC connected to the live BATS data stream.' : 'BOC is waiting for a live BATS connection.', badge: bats.connected ? 'green' : 'red' },
-      { user: 'SERVER', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), msg: 'Persistent relay endpoint ready for live updates.', badge: 'blue' }
-    ];
-
-    return `
-      <div class="boc-native-section">
-        <div class="boc-native-card">
-          <h3>BAF Chat</h3>
-          <div class="boc-native-message-layout">
-            <div class="boc-native-chat-list">
-              ${channels.map(function (channel) {
-                return `
-                  <div class="boc-native-channel-item">
-                    <span>${escapeHtml(channel.name)}</span>
-                    <span class="boc-native-unread">${channel.unread}</span>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-            <div class="boc-native-member-list">
-              ${members.length ? members.map(function (member) {
-                return `
-                  <div class="boc-native-member-item">
-                    <span>${member.name}</span>
-                    <small>${member.role}</small>
-                  </div>
-                `;
-              }).join('') : '<div class="boc-native-empty">No online members</div>'}
-            </div>
-          </div>
-        </div>
-
-        <div class="boc-native-card">
-          <h3>Message History</h3>
-          <div class="boc-native-list">
-            ${history.map(function (item) {
-              return `
-                <div class="boc-native-chat-item">
-                  <div class="boc-native-chat-meta">
-                    <strong>${escapeHtml(item.user)}</strong>
-                    <span>${escapeHtml(item.time)}</span>
-                  </div>
-                  <div>${escapeHtml(item.msg)}</div>
-                  <span class="boc-native-badge ${item.badge}">${item.user === 'SERVER' ? 'Relay' : 'Status'}</span>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderMiniRadar() {
-    const bats = getBatsSnapshot();
-    const pilots = bats.pilots.length ? bats.pilots : [];
-    const rowItems = pilots.length ? pilots.map(function (pilot) {
-      const callsign = escapeHtml(pilot.callsign || pilot.username || 'Unknown');
-      const altitude = escapeHtml(pilot.altitude || pilot.alt || 'N/A');
-      const heading = escapeHtml(pilot.heading || pilot.course || 'N/A');
-      const tag = String(pilot.group || pilot.team || pilot.status || 'All');
-      const badgeClass = tag.toLowerCase().indexOf('baf') !== -1 ? 'green' : tag.toLowerCase().indexOf('training') !== -1 ? 'yellow' : tag.toLowerCase().indexOf('ops') !== -1 || tag.toLowerCase().indexOf('operations') !== -1 ? 'orange' : 'blue';
-      return `
-        <div class="boc-native-list-item">
-          <div><strong>${callsign}</strong><br><small>${altitude} • ${heading}</small></div>
-          <span class="boc-native-badge ${badgeClass}">${escapeHtml(tag)}</span>
-        </div>
-      `;
-    }).join('') : '<div class="boc-native-empty">No live BATS aircraft</div>';
-
-    return `
-      <div class="boc-native-section">
-        <div class="boc-native-card">
-          <h3>Radar</h3>
-          <div class="boc-native-list-item" style="margin-bottom: 10px;"><span><strong>${escapeHtml(bats.status)}</strong></span><span class="boc-native-badge ${bats.connected ? 'green' : 'red'}">${bats.connected ? 'LIVE' : 'OFFLINE'}</span></div>
-          <input class="boc-native-search" type="text" placeholder="Search callsign/username" />
-          <div style="margin-top: 8px; display: grid; gap: 8px;">
-            <select class="boc-native-select">
-              <option>All</option>
-              <option>BAF</option>
-              <option>Training</option>
-              <option>Operations</option>
-            </select>
-          </div>
-          <div class="boc-native-list" style="margin-top: 10px;">
-            ${rowItems}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderPilots() {
-    return `
-      <div class="boc-native-card">
-        <h3>Active BAF Pilots</h3>
-        <table>
-          <thead>
-            <tr><th>User</th><th>Callsign</th><th>Status</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>MARA</td><td>BAF-14</td><td><span class="boc-native-badge green">Online</span></td></tr>
-            <tr><td>KAI</td><td>TRN-02</td><td><span class="boc-native-badge yellow">Training</span></td></tr>
-            <tr><td>ORBIT</td><td>OPS-01</td><td><span class="boc-native-badge orange">Ops</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  function renderOperations() {
-    return `
-      <div class="boc-native-card">
-        <h3>Operations</h3>
-        <div class="boc-native-list">
-          <div class="boc-native-list-item"><div><strong>Operation Atlas</strong><br><small>North Corridor</small></div><span class="boc-native-badge green">Live</span></div>
-          <div class="boc-native-list-item"><div><strong>Training Squadron 7</strong><br><small>Bravo Range</small></div><span class="boc-native-badge yellow">Queued</span></div>
-          <div class="boc-native-list-item"><div><strong>Intel Sweep</strong><br><small>Metro Sector</small></div><span class="boc-native-badge blue">Monitoring</span></div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderAlerts() {
-    return `
-      <div class="boc-native-card">
-        <h3>Alerts</h3>
-        <div class="boc-native-list">
-          <div class="boc-native-list-item"><div><strong>BAF Online</strong><br><small>Server confirmed</small></div><span class="boc-native-badge green">Green</span></div>
-          <div class="boc-native-list-item"><div><strong>BAF Notice</strong><br><small>Ops update posted</small></div><span class="boc-native-badge blue">Blue</span></div>
-          <div class="boc-native-list-item"><div><strong>Training Queue</strong><br><small>Queue update</small></div><span class="boc-native-badge yellow">Yellow</span></div>
-          <div class="boc-native-list-item"><div><strong>Operation Start</strong><br><small>North corridor active</small></div><span class="boc-native-badge orange">Orange</span></div>
-          <div class="boc-native-list-item"><div><strong>Admin Notice</strong><br><small>Critical review required</small></div><span class="boc-native-badge red">Red</span></div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderLogs() {
-    return `
-      <div class="boc-native-card">
-        <h3>Logs</h3>
-        <div class="boc-native-list">
-          <div class="boc-native-list-item"><div><strong>Chat Log</strong><br><small>12:11Z • #operations</small></div><span class="boc-native-badge green">Saved</span></div>
-          <div class="boc-native-list-item"><div><strong>Ops Log</strong><br><small>12:18Z • Atlas</small></div><span class="boc-native-badge blue">Saved</span></div>
-          <div class="boc-native-list-item"><div><strong>Pilot Log</strong><br><small>12:24Z • BAF-14</small></div><span class="boc-native-badge purple">Tracked</span></div>
-        </div>
-        <div style="display: grid; gap: 8px; margin-top: 12px;">
-          <button type="button" class="boc-native-button-row">Export JSON</button>
-          <button type="button" class="boc-native-button-row">Export CSV</button>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderSettings() {
-    return `
-      <div class="boc-native-card">
-        <h3>Settings</h3>
-        <div class="boc-native-list">
-          <label class="boc-native-list-item"><span>Enable BAF Chat</span><input type="checkbox" checked /></label>
-          <label class="boc-native-list-item"><span>Enable Radar</span><input type="checkbox" checked /></label>
-          <label class="boc-native-list-item"><span>Enable Alerts</span><input type="checkbox" checked /></label>
-          <label class="boc-native-list-item"><span>Enable Tracking</span><input type="checkbox" checked /></label>
-          <label class="boc-native-list-item"><span>Dark Mode</span><input type="checkbox" checked /></label>
-          <label class="boc-native-list-item"><span>Compact Mode</span><input type="checkbox" /></label>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderSection(section) {
-    const map = {
-      Dashboard: renderDashboard(),
-      'BAF Chat': renderBafChat(),
-      'Mini Radar': renderMiniRadar(),
-      'Active BAF Pilots': renderPilots(),
-      Operations: renderOperations(),
-      Alerts: renderAlerts(),
-      Logs: renderLogs(),
-      Settings: renderSettings()
-    };
-    return map[section] || renderDashboard();
-  }
-
-  function setPanelOpen(isOpen) {
-    const panel = document.getElementById('boc-native-panel');
-    const left = document.querySelector('.geofs-ui-left');
-    if (!panel) return;
-    panel.classList.toggle('open', !!isOpen);
-    panel.setAttribute('data-open', !!isOpen ? 'true' : 'false');
-    if (left) {
-      left.classList.toggle('boc-module-open', !!isOpen);
-    }
-
-    const button = document.getElementById('boc-module-button');
-    if (button) {
-      button.classList.toggle('active', !!isOpen);
-      button.setAttribute('aria-expanded', !!isOpen ? 'true' : 'false');
-    }
-  }
-
-  function syncButtonState() {
-    const button = document.getElementById('boc-module-button');
-    if (!button) return;
-    button.classList.toggle('active', !!state.open);
-    button.setAttribute('aria-expanded', !!state.open ? 'true' : 'false');
-  }
-
-  function render() {
-    const panel = document.getElementById('boc-native-panel');
-    if (!panel) return;
-
-    const nav = panel.querySelector('.boc-native-nav');
-    const content = panel.querySelector('.boc-native-content');
-    if (!nav || !content) return;
-
-    nav.innerHTML = SECTION_LIST.map(function (section) {
-      return '<button type="button" class="' + (section === state.section ? 'active' : '') + '" data-section="' + section + '">' + section + '</button>';
-    }).join('');
-
-    content.innerHTML = renderSection(state.section);
-
-    nav.querySelectorAll('[data-section]').forEach(function (button) {
-      button.addEventListener('click', function () {
-        state.section = button.getAttribute('data-section');
-        saveState();
-        render();
-      });
-    });
-
-    setPanelOpen(state.open);
-    syncButtonState();
-  }
-
-  function closeLegacyBocUi() {
-    document.querySelectorAll('.boc-sidebar, .boc-client-toast, .boc-floating-window, .boc-draggable-window').forEach(function (el) {
-      el.remove();
-    });
-  }
-
-  function buildPanel() {
-    const panel = document.createElement('aside');
-    panel.id = 'boc-native-panel';
-    panel.className = 'boc-native-panel' + (state.open ? ' open' : '');
-    panel.setAttribute('role', 'complementary');
-    panel.setAttribute('aria-label', 'BOC panel');
-    panel.innerHTML = `
-      <header class="boc-native-header">
-        <div class="boc-native-brand">
-          <span class="boc-native-mark">BOC</span>
-          <div>
-            <div class="boc-native-title">BOC</div>
-            <div class="boc-native-subtitle">BAF Ops</div>
-          </div>
-        </div>
-        <button type="button" class="boc-native-close" aria-label="Close BOC">✕</button>
-      </header>
-      <nav class="boc-native-nav" aria-label="BOC sections"></nav>
-      <div class="boc-native-content"></div>
-    `;
-
-    const closeButton = panel.querySelector('.boc-native-close');
-    closeButton.addEventListener('click', function () {
-      state.open = false;
-      saveState();
-      setPanelOpen(false);
-    });
-
-    return panel;
-  }
-
-  function findLeftRail() {
-    return document.querySelector('.geofs-ui-left, #geofs-ui-left');
-  }
-
+  function open(tab) { safeRun('panel open failed', () => { state.tab = tab || state.tab || 'chat'; state.config.activeTab = state.tab; saveConfig(); if (!state.panel) mount(); if (!state.panel) { log('panel element unavailable'); return; } state.unread = 0; state.panel.hidden = false; state.panel.classList.add('geofs-visible'); state.panel.style.setProperty('position', 'fixed', 'important'); state.panel.style.setProperty('left', '10px', 'important'); state.panel.style.setProperty('top', '60px', 'important'); state.panel.style.setProperty('width', '360px', 'important'); state.panel.style.setProperty('max-height', 'calc(100vh - 80px)', 'important'); state.panel.style.setProperty('display', 'block', 'important'); state.panel.style.setProperty('visibility', 'visible', 'important'); state.panel.style.setProperty('pointer-events', 'auto', 'important'); log('BOC panel opened'); updateButton(); render(); }); }
+  function close() { if (!state.panel) return; state.panel.classList.remove('geofs-visible'); state.panel.hidden = true; state.panel.style.setProperty('display', 'none', 'important'); }
+  function toolbarText(element) { return (element.textContent || element.getAttribute?.('aria-label') || element.title || '').trim().toLowerCase(); }
   function findToolbar() {
-    return document.querySelector('.geofs-ui-bottom, #geofs-ui-bottom, .geofs-bottom-bar, .geofs-ui-bottom-bar');
+    return document.querySelector('.geofs-ui-bottom, #geofs-ui-bottom, .geofs-bottom-bar, #geofs-bottom-bar, .geofs-ui-bottom-bar, .geofs-bottom-toolbar');
   }
-
-  function attachPanelToGeoFs() {
-    const left = findLeftRail();
-    if (!left) return false;
-
-    closeLegacyBocUi();
-
-    let panel = left.querySelector('#boc-native-panel');
-    if (!panel) {
-      panel = buildPanel();
-      left.appendChild(panel);
+  function makeButton() { const button = document.createElement('button'); button.id = 'boc-button'; button.type = 'button'; button.className = 'mdl-button mdl-js-button geofs-f-standard-ui geofs-mediumScreenOnly boc-toolbar-button'; button.title = 'BAF Operations Client'; button.setAttribute('aria-label', 'BAF Operations Client'); button.dataset.togglePanel = '.boc-panel'; button.dataset.tooltipClassname = 'mdl-tooltip--top'; button.setAttribute('tabindex', '0'); button.innerHTML = '<span class="boc-mark">🛡 BOC</span><span class="boc-unread" hidden></span>'; button.style.display = 'inline-flex'; button.style.visibility = 'visible'; button.style.opacity = '1'; button.addEventListener('click', (event) => { event.preventDefault(); event.stopImmediatePropagation(); if (isOpen()) close(); else open('chat'); }, true); return button; }
+  function insertToolbarButton(toolbar) {
+    if (geo().matchMedia?.('(max-width: 700px)').matches && insertMobileButton(toolbar)) return true;
+    if (document.getElementById('boc-button')) return true;
+    const button = makeButton();
+    const controls = [...toolbar.children];
+    const options = controls.find((element) => toolbarText(element).includes('options'));
+    const camera = controls.find((element) => toolbarText(element).includes('camera'));
+    if (options) toolbar.insertBefore(button, options);
+    else if (camera?.nextSibling) toolbar.insertBefore(button, camera.nextSibling);
+    else {
+      toolbar.appendChild(button);
     }
-
-    render();
+    state.button = button;
+    updateButton();
+    console.info?.('[BOC] successfully attached to toolbar.');
     return true;
   }
-
-  function injectToolbarButton() {
-    const toolbar = findToolbar();
-    if (!toolbar) return false;
-
-    let button = document.getElementById('boc-module-button');
-    if (!button) {
-      button = document.createElement('button');
-      button.id = 'boc-module-button';
-      button.type = 'button';
-      button.className = 'mdl-button mdl-js-button geofs-f-standard-ui boc-native-button';
-      button.setAttribute('aria-label', 'BOC operations panel');
-      button.setAttribute('data-toggle-panel', '#boc-native-panel');
-      button.setAttribute('data-tooltip-classname', 'mdl-tooltip--top');
-      button.setAttribute('title', 'Toggle BOC panel');
-      button.innerHTML = '<i class="material-icons">security</i><span>BOC</span>';
-      button.style.display = 'inline-flex';
-      button.style.visibility = 'visible';
-      button.style.opacity = '1';
-      button.addEventListener('click', function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        state.open = !state.open;
-        saveState();
-        setPanelOpen(state.open);
-      });
-
-      const candidateButtons = Array.from(toolbar.querySelectorAll('button'));
-      const referenceNode = candidateButtons.length ? candidateButtons[candidateButtons.length - 1] : null;
-      if (referenceNode && referenceNode.parentNode) {
-        referenceNode.parentNode.insertBefore(button, referenceNode.nextSibling);
-      } else {
-        toolbar.appendChild(button);
-      }
-    }
-    syncButtonState();
-    return true;
+  function insertMobileButton(toolbar) {
+    const overflow = toolbar.querySelector('.geofs-mobile-menu, .geofs-ui-mobile, .geofs-ui-menu, [aria-label*="menu" i]');
+    if (overflow && !document.getElementById('boc-button')) { const button = makeButton(); button.classList.add('boc-mobile-button'); overflow.appendChild(button); state.button = button; updateButton(); return true; }
+    return false;
   }
-
-  let uiRetryTimer = null;
-  let uiAttachAttempts = 0;
-
-  function handleUiRebuild() {
-    const left = findLeftRail();
-    const bottom = findToolbar();
-
-    if (bottom && !document.getElementById('boc-module-button')) {
-      injectToolbarButton();
-    }
-    if (left) {
-      attachPanelToGeoFs();
-    }
-  }
-
-  function scheduleUiRetry() {
-    if (uiRetryTimer) return;
-
-    uiAttachAttempts = 0;
-    uiRetryTimer = setInterval(function () {
-      uiAttachAttempts += 1;
-      handleUiRebuild();
-
-      if (uiAttachAttempts >= 3) {
-        clearInterval(uiRetryTimer);
-        uiRetryTimer = null;
-      }
-    }, 2000);
-  }
-
-  function init() {
-    if (!document.body) return;
-    if (!findLeftRail() && !findToolbar()) {
-      return;
-    }
-
-    document.body.classList.add('boc-geo-module-active');
-    injectCss();
-    handleUiRebuild();
-    scheduleUiRetry();
-
-    const bats = getWindowBats();
-    if (bats && typeof bats.sendEvent === 'function') {
-      bats.sendEvent('BOC_CLIENT_READY', { source: 'GeoFS-BOC', timestamp: Date.now() });
-    }
-    relayToServer('boc_client_ready', { status: 'ready', source: 'GeoFS-BOC' });
-
-    document.addEventListener('click', function (event) {
-      const panel = document.getElementById('boc-native-panel');
-      const button = document.getElementById('boc-module-button');
-      if (!panel || !button || panel.classList.contains('open') === false) return;
-      const insidePanel = panel.contains(event.target);
-      const insideButton = button.contains(event.target);
-      if (!insidePanel && !insideButton) {
-        state.open = false;
-        saveState();
-        setPanelOpen(false);
-      }
+  function mount() { safeRun('overlay creation failed', () => { const panelHost = document.body; if (!panelHost) return; const existing = document.getElementById('boc-panel'); if (existing) { state.panel = existing; if (existing.parentElement !== panelHost) panelHost.appendChild(existing); return; } state.panel = document.createElement('ul'); state.panel.id = 'boc-panel'; state.panel.className = 'geofs-list geofs-toggle-panel geofs-preference-list geofs-preferences geofs-stopMousePropagation geofs-stopKeyupPropagation boc-panel'; state.panel.dataset.noblur = 'true'; state.panel.hidden = true; state.panel.style.setProperty('display', 'none', 'important'); panelHost.appendChild(state.panel); state.diagnostics.overlay = true; render(); }); }
+  function mountButton() {
+    return safeRun('toolbar injection failed', () => {
+      const toolbar = findToolbar();
+      if (!toolbar) { log('waiting for toolbar...'); return false; }
+      mount();
+      if (document.getElementById('boc-button')) return true;
+      return insertToolbarButton(toolbar) || insertMobileButton(toolbar);
     });
-
-    document.addEventListener('keydown', function (event) {
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key && event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        state.open = !state.open;
-        saveState();
-        setPanelOpen(state.open);
-      }
+  }
+  function installToolbarObserver() { safeRun('toolbar observer failed', () => { const root = document.body || document.documentElement; if (!root || typeof MutationObserver !== 'function') return; const observer = new MutationObserver(() => { const toolbar = findToolbar(); if (toolbar && !document.getElementById('boc-button')) mountButton(); }); observer.observe(root, { childList: true, subtree: true }); }); }
+  function installPanelInteractions() {
+    if (!state.panel || state.panel.dataset.interactions) return;
+    state.panel.dataset.interactions = 'true';
+    state.panel.addEventListener('mousedown', (event) => {
+      if (!event.target.closest('.boc-head')) return;
+      if (!state.config.draggable || event.target.closest('button')) return;
+      const rect = state.panel.getBoundingClientRect();
+      const move = (moveEvent) => { state.panel.style.left = `${rect.left + moveEvent.clientX - event.clientX}px`; state.panel.style.top = `${rect.top + moveEvent.clientY - event.clientY}px`; state.panel.style.right = 'auto'; };
+      const end = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', end); const current = state.panel.getBoundingClientRect(); state.config.window.top = Math.max(0, Math.round(current.top)); state.config.window.right = Math.max(0, Math.round(window.innerWidth - current.right)); saveConfig(); };
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', end);
     });
-
-    const root = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    root.BOC = root.BOC || {
-      version: '4.0.0',
-      state: function () { return state; },
-      setSection: function (section) {
-        if (SECTION_LIST.indexOf(section) !== -1) {
-          state.section = section;
-          saveState();
-          render();
-        }
-      },
-      toggleSidebar: function () {
-        state.open = !state.open;
-        saveState();
-        setPanelOpen(state.open);
-      }
-    };
-
-    root.BATS = root.BATS || {
-      modules: {},
-      registerModule: function (name, module) {
-        this.modules[name] = module;
-        return module;
-      }
-    };
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (state.config.resizable && state.panel.offsetWidth >= 320 && state.panel.offsetHeight >= 300) { state.config.window.width = state.panel.offsetWidth; state.config.window.height = state.panel.offsetHeight; saveConfig(); } }).observe(state.panel);
   }
+  function installHotkeys() { safeRun('event hooks failed', () => { document.addEventListener('keydown', (event) => { if (event.key === 'Escape') return close(); if (!event.ctrlKey || !event.shiftKey) return; const keys = { B: 'chat', C: 'chat', O: 'operations', A: 'alerts' }; if (keys[event.key.toUpperCase()]) { event.preventDefault(); open(keys[event.key.toUpperCase()]); } }); }); }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init, { once: true });
-  } else {
-    init();
+  const css = `#boc-button{position:relative;margin:4px 8px;display:inline-flex;align-items:center;justify-content:center;min-width:88px;height:34px;padding:0 12px;border:1px solid rgba(128,149,170,.35);border-radius:8px;background:rgba(21,30,38,.94);color:#eef7ff;font:700 12px/1.1 Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}#boc-button:hover{background:rgba(31,43,54,.96)}#boc-button.active{background:rgba(92,142,255,.2);border-color:rgba(92,142,255,.5)}.boc-mark{display:inline-flex;align-items:center;gap:6px;font-weight:800}.boc-unread{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:#ef6974}.boc-shell{width:min(460px,calc(100vw - 24px));height:min(680px,calc(100vh - 96px));min-width:320px;min-height:300px;background:#111820;color:#e7edf5;border:1px solid #344454;border-radius:4px;display:flex;flex-direction:column;overflow:hidden;font-family:Arial,sans-serif}.boc-shell.light{background:#f5f7f9;color:#17232d}.boc-shell.compact{line-height:1.15}.boc-head{display:flex;align-items:center;gap:4px;padding:9px 12px;background:#163b4a}.boc-head div{flex:1}.boc-head small{display:block;font-weight:400;opacity:.7}.boc-head button,.boc-tab,.boc-shell button{cursor:pointer;color:inherit}.boc-head button{background:none;border:0;font-size:18px}.boc-shell nav{display:flex;flex-wrap:wrap;border-bottom:1px solid #344454;background:#192631}.boc-tab{border:0;background:none;color:#9cb1bd;padding:7px 8px;font-size:11px}.boc-tab.active{color:#fff;border-bottom:2px solid #52c4bd}.boc-shell main{flex:1;overflow:auto;padding:8px}.boc-toolbar{display:flex;gap:4px;margin-bottom:7px}.boc-toolbar input{flex:1}.boc-shell input,.boc-shell textarea,.boc-shell select{box-sizing:border-box;background:#18232c;color:inherit;border:1px solid #344454;border-radius:3px;padding:6px}.boc-shell label{display:grid;gap:4px;margin:8px 2px}.boc-switch{display:flex!important;align-items:center;gap:8px}.boc-switch input{display:none}.boc-switch span{width:27px;height:15px;border-radius:8px;background:#56636b;position:relative}.boc-switch span:after{content:'';position:absolute;width:11px;height:11px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.15s}.boc-switch input:checked+span{background:#3a9f91}.boc-switch input:checked+span:after{left:14px}.boc-row,.boc-item,.boc-notice{background:#19232c;border-bottom:1px solid #293744;padding:7px;margin-bottom:5px}.light .boc-row,.light .boc-item,.light .boc-notice{background:#e9eef2}.boc-row{border-left:3px solid #63d391}.boc-row.blue{border-color:#5ca9ff}.boc-row.yellow{border-color:#e5c55f}.boc-row.orange{border-color:#ef9a45}.boc-row.red{border-color:#ec6d78}.boc-row header,.boc-item{display:flex;justify-content:space-between;gap:8px}.boc-row time,.boc-item span,.boc-muted,.boc-row small{color:#8297a3;font-size:.85em}.boc-row p{margin:4px 0}.boc-tags{display:flex;gap:4px;flex-wrap:wrap;margin:5px 0}.boc-tags button,.boc-shell main>button{border:0;border-radius:3px;background:#263744;padding:6px 8px}.boc-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:8px}.boc-stat{background:#192c35;padding:8px;text-align:center}.boc-stat b,.boc-stat span{display:block}.boc-stat span{font-size:.78em;color:#9cb1bd}.boc-notice summary{cursor:pointer}.boc-notice small{float:right;color:#8297a3}.boc-empty{text-align:center;color:#8297a3;padding:28px 8px}.boc-shell footer{padding:6px 8px;border-top:1px solid #293744;color:#8297a3;font-size:11px}.boc-minimized{height:auto;min-height:0}.boc-minimized .boc-shell>nav,.boc-minimized .boc-shell>main,.boc-minimized .boc-shell>footer{display:none}`;
+  const integrationCss = '#boc-root{display:none;position:fixed;z-index:10000;top:72px;right:18px;width:460px;height:680px;max-width:calc(100vw - 24px);max-height:calc(100vh - 96px);margin:0;padding:0;resize:both;overflow:hidden}#boc-root.geofs-visible{display:block}.boc-panel .boc-shell{width:100%;height:100%;box-sizing:border-box}.boc-toolbar-button{min-width:56px}.boc-toolbar-button .boc-mark{border:0;padding:0;font-weight:500}.boc-startup-toast{position:fixed;z-index:10001;right:18px;bottom:64px;padding:10px 14px;background:#263744;color:#e7edf5;border-left:3px solid #52c4bd;border-radius:3px;font:12px Arial,sans-serif;box-shadow:0 3px 12px #0006}.boc-mobile-button{display:none}@media(max-width:700px){#boc-root{top:48px;right:8px;width:calc(100vw - 16px);height:calc(100vh - 90px)}.boc-toolbar-button{display:none}.boc-mobile-button{display:block}}';
+  const panelCss = '#boc-panel{display:none;position:fixed;left:10px;top:60px;width:360px;max-width:calc(100vw - 20px);max-height:calc(100vh - 80px);overflow-y:auto;box-sizing:border-box;margin:0;padding:0;z-index:2147483647}#boc-panel.geofs-visible{display:block !important}';
+  const plainCss = '.boc-shell{width:auto!important;height:auto!important;min-width:0;min-height:0;background:transparent!important;color:inherit;border:0;border-radius:0;box-shadow:none;font-family:inherit}.boc-head{background:transparent;border-bottom:1px solid rgba(128,128,128,.35);padding:8px}.boc-head button{font-size:16px}.boc-shell nav{background:transparent}.boc-tab{color:inherit;border-radius:0}.boc-shell main{padding:8px}.boc-row,.boc-item,.boc-notice{background:transparent;border-radius:0;box-shadow:none}.boc-stat{background:transparent;border:1px solid rgba(128,128,128,.35);border-radius:0}.boc-tags button,.boc-shell main>button{border-radius:0;background:transparent;border:1px solid rgba(128,128,128,.45)}.boc-startup-toast{border-radius:0;box-shadow:none}';
+  const diagnosticCss = '.boc-diagnostic{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #293744}.boc-diagnostic span{width:8px;height:8px;border-radius:50%;background:#ef6974}.boc-diagnostic span.ok{background:#63d391}.boc-diagnostic b{margin-left:auto;font-size:10px;color:#8297a3}';
+  function showToast() { safeRun('startup toast failed', () => { const toast = document.createElement('div'); toast.className = 'boc-startup-toast'; toast.textContent = 'BOC v1.0 | Belgian Tech | Ready'; document.body?.appendChild(toast); setTimeout(() => toast.remove(), 3500); }); }
+  function exposeNamespace(root) {
+    if (!root) return;
+    root.BOC = root.BOC || {};
+    Object.assign(root.BOC, {
+      version: '1.0.0',
+      waitForGeoFS,
+      Core: { waitForGeoFS },
+      Settings: { get: () => ({ ...state.config }), save: saveConfig, reset: () => { state.config = merge({}, DEFAULT_CONFIG); saveConfig(); render(); } },
+      UI: { open, close, render },
+      Chat: { getMessages: () => [...state.messages] },
+      Network: { getPilots: () => [...state.pilots.values()] },
+      Operations: { getMissions: () => [...state.missions] },
+      Logging: { getLogs: () => [...state.logs], clear: () => { state.logs = []; saveLogs(); } },
+      AlertManager: { getAlerts: () => [...state.alerts] },
+      Overlay: { getElement: () => state.panel },
+      Diagnostics: { get: () => ({ ...state.diagnostics, ready: state.ready, stages: [...state.stages] }) },
+    });
   }
+  async function initialize() {
+    let root;
+    try { root = await waitForGeoFS(); } catch (error) { log('GeoFS readiness failed', error); return; }
+    state.diagnostics.geofs = Boolean(root?.geofs);
+    stage(1);
+    safeRun('stylesheet initialization failed', () => { if (document.head) { const style = document.createElement('style'); style.textContent = css + integrationCss + panelCss + plainCss + diagnosticCss; document.head.appendChild(style); } });
+    const toolbar = await waitForSelector('.geofs-ui-bottom, #geofs-ui-bottom, .geofs-bottom-bar, #geofs-bottom-bar, .geofs-ui-bottom-bar, .geofs-bottom-toolbar');
+    if (!toolbar) { log('toolbar detection timed out'); return; }
+    stage(2);
+    mountButton();
+    state.diagnostics.toolbar = Boolean(document.getElementById('boc-button'));
+    stage(3);
+    mount();
+    state.diagnostics.overlay = Boolean(document.getElementById('boc-panel'));
+    stage(4);
+    state.tab = state.config.activeTab || 'chat';
+    stage(5);
+    state.runtime = { ui: Boolean(root?.ui), multiplayer: Boolean(root?.multiplayer), flight: Boolean(root?.flight), weather: Boolean(root?.weather) };
+    installChatObserver();
+    state.diagnostics.chat = true;
+    installHotkeys();
+    installToolbarObserver();
+    setInterval(poll, 750);
+    state.ready = true;
+    stage(6);
+    exposeNamespace(root);
+    stage(7);
+    showToast();
+  }
+  function start() { initialize().catch((error) => log('initialization failed', error)); }
+  start();
 })();
