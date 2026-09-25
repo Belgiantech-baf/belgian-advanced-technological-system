@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOC v4</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="boc-shell">
+      <aside class="boc-sidebar">
+        <header class="boc-header">
+          <div class="boc-brand">
+            <span class="boc-brand-mark">BOC</span>
+            <div>
+              <strong>BAF Operations Client</strong>
+              <small>v4.0</small>
+            </div>
+          </div>
+          <div class="boc-header-actions">
+            <button type="button" class="icon-button" id="boc-pin" title="Pin sidebar">📌</button>
+            <button type="button" class="icon-button" id="boc-close" title="Close sidebar">✕</button>
+          </div>
+        </header>
+
+        <nav id="boc-nav" class="boc-nav" aria-label="BOC navigation"></nav>
+
+        <main class="boc-content">
+          <div class="section-mini">BATS Operations Environment</div>
+          <h1 id="boc-window-title">Dashboard</h1>
+          <section id="boc-views"></section>
+        </main>
+      </aside>
+    </div>
+
+    <div id="boc-toast">
+      <div class="toast-title">BOC v4.0 Ready</div>
+      <div class="toast-text">Belgian Tech Systems • BAF Operations Client</div>
+    </div>
+
+    <script src="./src/BOC.Storage.js"></script>
+    <script src="./src/BOC.Settings.js"></script>
+    <script src="./src/BOC.Core.js"></script>
+    <script src="./src/BOC.UI.js"></script>
+    <script src="./src/BOC.Chat.js"></script>
+    <script src="./src/BOC.Pilots.js"></script>
+    <script src="./src/BOC.Operations.js"></script>
+    <script src="./src/BOC.Alerts.js"></script>
+    <script src="./src/BOC.Diagnostics.js"></script>
+    <script src="./src/BOC.Network.js"></script>
+    <script src="./src/BOC.Adapter.GeoFS.js"></script>
+    <script src="./src/BOC.Adapter.BATS.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

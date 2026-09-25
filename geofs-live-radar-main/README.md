@@ -20,6 +20,7 @@ Install dependencies and set both environment variables before starting the appl
 pip install -r requirements.txt
 $env:DISCORD_BOT_TOKEN = "your-bot-token"
 $env:DISCORD_CHANNEL_ID = "123456789012345678"
+$env:BAF_CHAT_CHANNEL_ID = "1497398101667745942"
 python .\geofs_live_radar.py
 ```
 

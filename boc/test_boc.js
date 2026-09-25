@@ -22,6 +22,8 @@ const context = {
     head: { appendChild() {} },
     body: { appendChild() {} },
     documentElement: { addEventListener() {}, appendChild() {} },
+    addEventListener() {},
+    querySelector: () => null,
     createElement: () => ({ style: {}, appendChild() {}, addEventListener() {}, querySelectorAll: () => [], querySelector: () => null }),
   },
   window: {
@@ -33,6 +35,7 @@ const context = {
   Node: { ELEMENT_NODE: 1 },
   GM_registerMenuCommand() {},
   GM_download() {},
+  setTimeout() {},
 };
 context.window.window = context.window;
 context.window.XMLHttpRequest = context.XMLHttpRequest;
@@ -42,9 +45,10 @@ context.XMLHttpRequest.prototype.addEventListener = function addEventListener() 
 vm.createContext(context);
 vm.runInContext(source, context, { filename: 'boc.user.js' });
 
-const config = JSON.parse(storage.get('boc.config.v1'));
+const config = JSON.parse(storage.get('BOC_SETTINGS'));
 assert.equal(config.relayEnabled, false);
 assert.deepEqual(config.tags, ['[BAF]', '[OPS]', '[ALERT]', '[TRAINING]', '[ADMIN]']);
+assert.equal(config.theme, 'dark');
 console.log('PASS configuration defaults persist');
 console.log('PASS userscript evaluates without browser network access');
 console.log('PASS localStorage integration available');

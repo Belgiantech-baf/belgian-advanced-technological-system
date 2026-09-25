@@ -82,6 +82,9 @@ AIRCRAFT_NAMES = {
   5229: "F-35B Lightning II",
 }
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+DISCORD_WEBHOOK_URLS = [url.strip() for url in os.environ.get("DISCORD_WEBHOOK_URLS", "").split(",") if url.strip()]
+if DISCORD_WEBHOOK_URL and DISCORD_WEBHOOK_URL not in DISCORD_WEBHOOK_URLS:
+  DISCORD_WEBHOOK_URLS.insert(0, DISCORD_WEBHOOK_URL)
 DISCORD_TIMEOUT = 5
 TEST_MODE = os.environ.get("TEST_MODE", "false").strip().lower() == "true"
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
@@ -89,7 +92,7 @@ DISCORD_CHANNEL_ID = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
 SCRAMBLE_ROLE_ID = 1552339958021226607
 SCRAMBLE_CONFIG_PATH = Path(__file__).resolve().parent / "scramble_config.json"
 CHAT_LOG_CONFIG_PATH = Path(__file__).resolve().parent / "chat_logger_config.json"
-CHAT_LOG_CHANNEL_ID = 1497398101667745942
+CHAT_LOG_CHANNEL_ID = int(os.environ.get("BAF_CHAT_CHANNEL_ID", "1497398101667745942").strip())
 BOC_LOG_MAX_LENGTH = 1800
 BOC_RELAY_KEY = os.environ.get("BOC_RELAY_KEY", "").strip()
 
@@ -258,16 +261,18 @@ def validate_live_configuration():
     raise RuntimeError("DISCORD_BOT_TOKEN is missing or still a placeholder")
   if not DISCORD_CHANNEL_ID.isdigit():
     raise RuntimeError("DISCORD_CHANNEL_ID must be numeric")
-  if DISCORD_WEBHOOK_URL in {"", "https://discord.com/api/webhooks/ID/TOKEN"}:
-    raise RuntimeError("DISCORD_WEBHOOK_URL is missing or still a placeholder")
-  if not re.fullmatch(r"https://discord(?:app)?\.com/api/webhooks/\d+/[^\s/]+", DISCORD_WEBHOOK_URL):
-    raise RuntimeError("DISCORD_WEBHOOK_URL has an invalid format")
+  if not DISCORD_WEBHOOK_URLS or any(url == "https://discord.com/api/webhooks/ID/TOKEN" for url in DISCORD_WEBHOOK_URLS):
+    raise RuntimeError("At least one Discord webhook is missing or still a placeholder")
+  if any(not re.fullmatch(r"https://discord(?:app)?\.com/api/webhooks/\d+/[^\s/]+", url) for url in DISCORD_WEBHOOK_URLS):
+    raise RuntimeError("A Discord webhook URL has an invalid format")
 
   started = time.perf_counter()
-  response = requests.get(DISCORD_WEBHOOK_URL, timeout=DISCORD_TIMEOUT)
-  response.raise_for_status()
+  for webhook_url in DISCORD_WEBHOOK_URLS:
+    response = requests.get(webhook_url, timeout=DISCORD_TIMEOUT)
+    response.raise_for_status()
   logger.info(
-    "Startup report: monitoring_enabled=true webhook_enabled=true belgium_zone_enabled=true webhook_latency_ms=%.2f",
+    "Startup report: monitoring_enabled=true webhooks_enabled=%d belgium_zone_enabled=true webhook_latency_ms=%.2f",
+    len(DISCORD_WEBHOOK_URLS),
     (time.perf_counter() - started) * 1000,
   )
 
@@ -321,16 +326,16 @@ def get_nearest_air_base(latitude, longitude):
 
 
 def post_discord_alert(payload, aircraft_id, event):
-  try:
-    response = requests.post(
-      DISCORD_WEBHOOK_URL,
-      json={"content": payload},
-      timeout=DISCORD_TIMEOUT,
-    )
-    response.raise_for_status()
-    logger.info("Discord %s alert sent for aircraft %s", event, aircraft_id)
-  except requests.RequestException as exc:
-    logger.warning("Discord %s alert failed for aircraft %s: %s", event, aircraft_id, exc)
+  successes = 0
+  for webhook_url in DISCORD_WEBHOOK_URLS:
+    try:
+      response = requests.post(webhook_url, json={"content": payload}, timeout=DISCORD_TIMEOUT)
+      response.raise_for_status()
+      successes += 1
+    except requests.RequestException as exc:
+      logger.warning("Discord %s webhook failed for aircraft %s: %s", event, aircraft_id, exc)
+  if successes:
+    logger.info("Discord %s alert sent to %d webhook(s) for aircraft %s", event, successes, aircraft_id)
 
 
 def queue_discord_alert(event, aircraft_id, aircraft):
@@ -342,8 +347,8 @@ def queue_discord_alert(event, aircraft_id, aircraft):
   if bot_active:
     logger.info("[DEBUG] Alert queued for bot delivery: Bot mode is active; webhook delivery is bypassed.")
     return
-  if not DISCORD_WEBHOOK_URL:
-    logger.error("[ERROR] Discord exception: DISCORD_WEBHOOK_URL is empty; webhook delivery is disabled")
+  if not DISCORD_WEBHOOK_URLS:
+    logger.error("[ERROR] Discord exception: no webhook URLs configured; webhook delivery is disabled")
     return
 
   payload = (
