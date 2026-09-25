@@ -585,15 +585,43 @@ def inspect_aircraft_feed(data):
 # ---------------- Flask / proxy ----------------
 app = Flask(__name__)
 
+ALLOWED_CORS_ORIGINS = {
+  "https://www.geo-fs.com",
+  "https://geo-fs.com",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+}
+
+
+def allowed_origin_value(origin):
+  if not origin:
+    return "*"
+  if origin in ALLOWED_CORS_ORIGINS or origin.endswith(".geo-fs.com"):
+    return origin
+  return "*"
+
+
+@app.after_request
+def add_cors_headers(response):
+  origin = request.headers.get("Origin")
+  response.headers["Access-Control-Allow-Origin"] = allowed_origin_value(origin)
+  response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-BOC-Relay-Key, X-API-Key, Authorization"
+  response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+  response.headers["Vary"] = "Origin"
+  if request.method == "OPTIONS":
+    response.status_code = 204
+  return response
+
 
 @app.route("/api/boc/log", methods=["POST", "OPTIONS"])
 def receive_boc_log():
   """Relay BOC activity to the server-side Discord bot without exposing credentials."""
   if request.method == "OPTIONS":
     response = make_response("", 204)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Origin"] = allowed_origin_value(request.headers.get("Origin"))
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-BOC-Relay-Key, X-API-Key, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Vary"] = "Origin"
     return response
   if BOC_RELAY_KEY and not hmac.compare_digest(request.headers.get("X-BOC-Relay-Key", ""), BOC_RELAY_KEY):
     return make_response(json.dumps({"error": "Unauthorized relay"}), 401, {"Content-Type": "application/json"})
@@ -617,7 +645,8 @@ def receive_boc_log():
   if not discord_bot_service or not discord_bot_service.notify_chat(chat_message):
     return make_response(json.dumps({"error": "Discord bot is not ready"}), 503, {"Content-Type": "application/json"})
   response = make_response(json.dumps({"queued": True, "channel_id": CHAT_LOG_CHANNEL_ID}), 202, {"Content-Type": "application/json"})
-  response.headers["Access-Control-Allow-Origin"] = "*"
+  response.headers["Access-Control-Allow-Origin"] = allowed_origin_value(request.headers.get("Origin"))
+  response.headers["Vary"] = "Origin"
   return response
 
 @app.route("/api/map", methods=["GET"])

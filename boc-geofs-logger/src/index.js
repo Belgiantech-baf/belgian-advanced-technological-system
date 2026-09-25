@@ -7,8 +7,9 @@ import express from 'express';
 import helmet from 'helmet';
 import { fileURLToPath } from 'node:url';
 import { openDatabase, createRepository } from './database.js';
-import { createCollector } from './collector.js';
+import { createCollector, normalizeBafChatMessage, validateBafChatMessage } from './collector.js';
 import { createLogger } from './logger.js';
+import { shouldForwardDiscordEvent, toDiscordRelayPayload } from './discordRelay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -26,7 +27,7 @@ const ingestWindows = new Map();
 function publish(event) {
   const payload = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
   for (const response of sseClients) response.write(payload);
-  if (event.type === 'chat.message') forwardToRadarBot(event.data);
+  if (shouldForwardDiscordEvent(event.type)) forwardToRadarBot(event.data);
 }
 
 async function forwardToRadarBot(message) {
@@ -34,34 +35,35 @@ async function forwardToRadarBot(message) {
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (discordRelayKey) headers['X-BOC-Relay-Key'] = discordRelayKey;
+    const payload = toDiscordRelayPayload(message);
     const response = await fetch(discordRelayUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        type: 'chat',
-        username: message.callsign || 'GeoFS',
-        message: message.message,
-        timestamp: message.timestamp,
-        server: message.server,
-        uid: message.uid,
-        aircraftId: message.aircraftId,
-      }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    logger.info({ messageId: message.id }, 'Chat message forwarded to existing Discord bot');
+    logger.info({ messageId: message?.id }, 'Chat message forwarded to existing Discord bot');
   } catch (error) {
-    logger.error({ error: error.message, messageId: message.id }, 'Discord bot relay failed; message remains stored');
+    logger.error({ error: error.message, messageId: message?.id }, 'Discord bot relay failed; message remains stored');
   }
 }
 
 const collector = createCollector({ repository, publish, logger });
 const app = express();
+const configuredOrigins = (process.env.CORS_ORIGIN || 'https://www.geo-fs.com,https://geo-fs.com').split(',').map((origin) => origin.trim()).filter(Boolean);
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  return configuredOrigins.includes(origin) || origin.endsWith('.geo-fs.com');
+};
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '64kb' }));
 app.use((request, response, next) => {
-  response.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
+  const requestedOrigin = request.headers.origin;
+  const allowedOrigin = isAllowedOrigin(requestedOrigin) ? (requestedOrigin || configuredOrigins[0] || '*') : (configuredOrigins[0] || '*');
+  response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  response.setHeader('Vary', 'Origin');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-BOC-Relay-Key');
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   if (request.method === 'OPTIONS') return response.sendStatus(204);
   next();
@@ -109,6 +111,41 @@ app.get('/api/events', (request, response) => {
   sseClients.add(response);
   const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 25_000);
   request.on('close', () => { clearInterval(heartbeat); sseClients.delete(response); });
+});
+
+app.get('/api/baf-chat/messages', (request, response) => {
+  const limit = Math.min(Math.max(Number(request.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(request.query.offset) || 0, 0);
+  const messages = repository.list({ limit, offset, q: request.query.q, callsign: request.query.callsign, uid: request.query.uid, from: request.query.from, to: request.query.to });
+  response.json({ channel: 'BAF CHAT', messages, limit, offset });
+});
+
+app.post('/api/baf-chat/messages', (request, response) => {
+  if (!withinIngestLimit(request)) return response.status(429).json({ error: 'BAF chat rate limit exceeded' });
+  const payload = request.body || {};
+  const validation = validateBafChatMessage(payload);
+  if (!validation.valid) return response.status(400).json({ error: 'Expected channel, callsign, and message text for the BAF chat channel' });
+  const normalized = normalizeBafChatMessage({ ...payload, timestamp: payload.timestamp || new Date().toISOString() });
+  if (!normalized) return response.status(400).json({ error: 'Unable to normalize message for BAF chat' });
+  try {
+    const result = collector.ingest([
+      {
+        id: normalized.sourceId || `bafchat:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        cs: normalized.callsign,
+        uid: normalized.uid || `baf:${normalized.callsign}`,
+        aircraftId: normalized.aircraftId || null,
+        msg: normalized.message,
+        server: normalized.server,
+        timestamp: normalized.timestamp,
+      },
+    ], 'BAF_CHAT');
+    const freshMessage = result.messages[0] || { ...normalized, channel: validation.channel };
+    publish({ type: 'baf.chat', data: { ...freshMessage, channel: validation.channel, username: validation.username } });
+    response.status(202).json({ accepted: true, channel: validation.channel, message: freshMessage });
+  } catch (error) {
+    logger.error({ error: error.message }, 'Database error while storing BAF chat message');
+    response.status(500).json({ error: 'Unable to store BAF chat message' });
+  }
 });
 
 app.post('/api/ingest', (request, response) => {

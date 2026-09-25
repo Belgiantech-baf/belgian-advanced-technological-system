@@ -39,6 +39,33 @@ export function normalizeMessage(raw, source = 'GeoFS') {
   };
 }
 
+export function validateBafChatMessage(payload) {
+  const raw = payload && typeof payload === 'object' ? payload : {};
+  const callsign = String(raw.callsign ?? raw.cs ?? raw.username ?? '').trim();
+  const message = String(raw.message ?? raw.msg ?? '').trim();
+  const channel = String(raw.channel ?? 'BAF CHAT').trim() || 'BAF CHAT';
+  const server = String(raw.server ?? 'BOC Server').trim() || 'BOC Server';
+  const valid = Boolean(callsign) && callsign.length <= 64 && Boolean(message) && message.length <= 500 && channel.length > 0 && channel.length <= 128;
+  return { valid, channel, callsign, message, server, username: String(raw.username ?? raw.callsign ?? callsign).trim() };
+}
+
+export function normalizeBafChatMessage(raw) {
+  const validated = validateBafChatMessage(raw);
+  if (!validated.valid) return null;
+  const id = textOrNull(raw.id ?? raw.messageId) || `bafchat:${Date.now()}:${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2)}`;
+  const normalized = normalizeMessage({
+    id,
+    cs: validated.callsign,
+    uid: textOrNull(raw.uid ?? raw.userId) ?? `baf:${validated.callsign}`,
+    acid: textOrNull(raw.aircraftId ?? raw.acid),
+    msg: validated.message,
+    server: validated.server,
+    timestamp: raw.timestamp ?? new Date().toISOString(),
+  }, 'BAF_CHAT');
+  if (!normalized) return null;
+  return { ...normalized, channel: validated.channel, username: validated.username };
+}
+
 export function createCollector({ repository, publish, logger }) {
   return {
     ingest(messages, source = 'GeoFS') {
