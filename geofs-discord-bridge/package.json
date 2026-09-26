@@ -1,0 +1,14 @@
+{
+  "name": "geofs-discord-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "ws": "^8.18.0"
+  }
+}

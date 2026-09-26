@@ -40,6 +40,7 @@
     processed: 0, alertCount: 0, lastHeartbeat: null, startedAt: Date.now(),
     diagnostics: { geofs: false, toolbar: false, multiplayer: false, chat: false, overlay: false }, stages: new Set(), ready: false,
     bafChat: { connected: false, members: [], messages: [], source: null, status: 'disconnected', lastUpdate: null },
+    batsAdapter: null,
   };
 
   function page() { return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window; }
@@ -110,6 +111,25 @@
     return true;
   }
   function keywordHit(message) { return state.config.keywords.some((word) => new RegExp(`\\b${String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(message)); }
+  function getBATSAdapter() {
+    if (state.batsAdapter) return state.batsAdapter;
+    const adapterCtor = window.BOC?.BATSAdapter || window.BATSAdapter || window.BOC?.Adapter?.BATS || window.BATS?.Adapter || null;
+    if (typeof adapterCtor === 'function') {
+      const instance = new adapterCtor({
+        core: {
+          getOperations: () => state.missions,
+          getActivePilots: () => [...state.pilots.values()],
+          sendEvent: () => undefined,
+        },
+        tags: [...new Set([...(state.config.tags || []), ...BAF_IDENTIFIERS, ...DEFAULT_KEYWORDS])],
+      });
+      state.batsAdapter = instance;
+      if (window.BOC) { window.BOC.app = window.BOC.app || {}; window.BOC.app.bats = instance; }
+      if (window.BATS) { window.BATS.instance = instance; }
+      return instance;
+    }
+    return null;
+  }
   function receive(raw) {
     const message = normalize(raw); if (!message || state.seen.has(message.id)) return;
     if (state.config.mutedUsers.some((user) => user.toLowerCase() === message.callsign.toLowerCase())) return;
@@ -124,9 +144,20 @@
   }
   function poll() {
     safeRun('pilot tracking failed', () => {
+      const adapter = getBATSAdapter();
       const root = geo();
       const multiplayer = root?.multiplayer;
-      state.diagnostics.multiplayer = Boolean(multiplayer);
+      state.diagnostics.multiplayer = Boolean(multiplayer || adapter);
+
+      const batsRadar = adapter && typeof adapter.getRadarData === 'function' ? adapter.getRadarData() : null;
+      if (batsRadar) {
+        const tracked = Array.isArray(batsRadar.trackedAircraft) ? batsRadar.trackedAircraft : [];
+        const active = Array.isArray(batsRadar.activeBAF) ? batsRadar.activeBAF : [];
+        tracked.forEach((pilot) => upsertPilot({ cs: pilot.callsign, username: pilot.username, acid: pilot.id, aircraft: pilot.aircraft, ...pilot }, pilot.server || 'BATS'));
+        active.forEach((pilot) => upsertPilot({ cs: pilot.callsign, username: pilot.username, acid: pilot.id, aircraft: pilot.aircraft, ...pilot }, pilot.server || 'BATS'));
+        state.missions = Array.isArray(batsRadar.operations) ? batsRadar.operations : state.missions;
+      }
+
       if (!multiplayer) return;
       const messages = multiplayer.lastRequest?.chatMessages;
       if (Array.isArray(messages) && messages.length) { const signature = messages.map((item) => `${item.id ?? ''}|${item.uid ?? ''}|${item.acid ?? ''}|${item.cs ?? ''}|${item.msg ?? ''}`).join('\n'); if (signature !== state.lastBatch) { state.lastBatch = signature; messages.forEach(receive); } }
@@ -208,7 +239,13 @@
     };
   }
   function getLiveRadarAircraft() {
-    const bats = window.BATS || window.BOC?.app?.bats || window.BOC?.Adapter?.BATS || null;
+    const adapter = getBATSAdapter();
+    const bats = window.BATS || window.BOC?.app?.bats || window.BOC?.Adapter?.BATS || adapter || null;
+
+    if (adapter && typeof adapter.getTrackedAircraft === 'function') {
+      const aircraft = adapter.getTrackedAircraft();
+      if (Array.isArray(aircraft) && aircraft.length) return aircraft.map(normalizeBatsAircraft).filter(Boolean);
+    }
     if (bats && typeof bats.getAircraft === 'function') {
       const aircraft = bats.getAircraft();
       if (Array.isArray(aircraft) && aircraft.length) return aircraft.map(normalizeBatsAircraft).filter(Boolean);
@@ -475,6 +512,7 @@
       Core: { waitForGeoFS },
       Settings: { get: () => ({ ...state.config }), save: saveConfig, reset: () => { state.config = merge({}, DEFAULT_CONFIG); saveConfig(); render(); } },
       UI: { open, close, render },
+      BATSAdapter: getBATSAdapter(),
       Chat: { getMessages: () => [...state.messages] },
       Network: { getPilots: () => [...state.pilots.values()] },
       Operations: { getMissions: () => [...state.missions] },

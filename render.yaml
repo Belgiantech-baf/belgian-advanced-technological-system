@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: geofs-live-radar
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: TEST_MODE
+        value: "false"
+      - key: PORT
+        sync: false
