@@ -1,3 +1,15 @@
+// ==UserScript==
+// @name         GeoFS Discord Bridge
+// @namespace    https://github.com/
+// @version      1.0.0
+// @description  Relays GeoFS multiplayer updates and chat through a local bridge to Discord.
+// @author       Copilot
+// @match        https://*.geofs.com/*
+// @match        https://*.geofs.io/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
 (function () {
   'use strict';
 
