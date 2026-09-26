@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { GeoFSBridgeServer } from './websocket.js';
 import { GeoFSDiscordBot } from '../bot/discord.js';
 import { getCommandResponse, parseGeoCommand } from '../bot/commands.js';

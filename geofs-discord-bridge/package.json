@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server/server.js",
-    "test": "node --test tests/*.test.js"
+    "start": "node --env-file=.env server/server.js",
+    "test": "node --env-file=.env --test tests/*.test.js"
   },
   "dependencies": {
     "discord.js": "^14.18.0",
+    "dotenv": "^16.4.5",
     "ws": "^8.18.0"
   }
 }
