@@ -35,6 +35,12 @@ test('normalizeChat decodes encoded message text', () => {
   assert.equal(chat.message, 'Hello Discord!');
 });
 
+test('dotenv loads runtime values from the local .env file', async () => {
+  await import('dotenv/config');
+  assert.ok(process.env.BRIDGE_SECRET, 'BRIDGE_SECRET should be loaded from .env');
+  assert.ok(process.env.DISCORD_BOT_TOKEN, 'DISCORD_BOT_TOKEN should be loaded from .env');
+});
+
 test('bridge server authenticates and handles player updates', () => {
   const bridge = new GeoFSBridgeServer({ port: 0, bridgeSecret: 'secret' });
   const ws = bridge.start();
