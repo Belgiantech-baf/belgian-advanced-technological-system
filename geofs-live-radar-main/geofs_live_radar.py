@@ -95,7 +95,7 @@ CHAT_LOG_CONFIG_PATH = Path(__file__).resolve().parent / "chat_logger_config.jso
 CHAT_LOG_CHANNEL_ID = int(os.environ.get("BAF_CHAT_CHANNEL_ID", "1497398101667745942").strip())
 BOC_LOG_MAX_LENGTH = 1800
 BOC_RELAY_KEY = os.environ.get("BOC_RELAY_KEY", "").strip()
-CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "").strip()
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "cb1_3zm7_1_abddb86f9a23e75d97cc9af8").strip()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1323,7 +1323,7 @@ HTML_PAGE = r"""<!doctype html>
 
   
   const CARTO_API_KEY = "__CARTO_API_KEY__";
-  const cartoBasemapQuery = CARTO_API_KEY ? `?api_key=${encodeURIComponent(CARTO_API_KEY)}` : '';
+  const cartoBasemapQuery = CARTO_API_KEY ? `?key=${encodeURIComponent(CARTO_API_KEY)}` : '';
 
   const lightTiles = L.tileLayer(
     `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png${cartoBasemapQuery}`,
