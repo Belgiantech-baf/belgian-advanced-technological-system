@@ -95,6 +95,7 @@ CHAT_LOG_CONFIG_PATH = Path(__file__).resolve().parent / "chat_logger_config.jso
 CHAT_LOG_CHANNEL_ID = int(os.environ.get("BAF_CHAT_CHANNEL_ID", "1497398101667745942").strip())
 BOC_LOG_MAX_LENGTH = 1800
 BOC_RELAY_KEY = os.environ.get("BOC_RELAY_KEY", "").strip()
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "").strip()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -682,7 +683,8 @@ def proxy_map():
 
 @app.route("/", methods=["GET"])
 def index():
-    return Response(HTML_PAGE, mimetype="text/html")
+    rendered = HTML_PAGE.replace("__CARTO_API_KEY__", CARTO_API_KEY)
+    return Response(rendered, mimetype="text/html")
 
 
 if DiscordBotService:
@@ -1320,8 +1322,11 @@ HTML_PAGE = r"""<!doctype html>
   }).setView([20,0], 2);
 
   
+  const CARTO_API_KEY = "__CARTO_API_KEY__";
+  const cartoBasemapQuery = CARTO_API_KEY ? `?api_key=${encodeURIComponent(CARTO_API_KEY)}` : '';
+
   const lightTiles = L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png${cartoBasemapQuery}`,
     {
         attribution: '&copy; OpenStreetMap & Carto',
         maxZoom: 19,
@@ -1329,7 +1334,7 @@ HTML_PAGE = r"""<!doctype html>
   );
 
   const darkTiles = L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${cartoBasemapQuery}`,
     {
         attribution: '&copy; OpenStreetMap & Carto',
         maxZoom: 19,
