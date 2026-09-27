@@ -7,7 +7,9 @@
 // @match        https://geo-fs.com/*
 // @run-at       document-start
 // @grant        GM_download
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      https://belgian-advanced-technological-system.onrender.com
 // ==/UserScript==
 
 (function () {
@@ -100,8 +102,25 @@
   }
   function alertUser(type, data = {}) { const entry = record('alert', { alertType: type, ...data }); state.alerts.unshift(entry); state.alerts = state.alerts.slice(0, 100); state.alertCount += 1; render(); }
   async function relay(entry) {
-    if (!/^https:\/\//i.test(state.config.relayUrl || '')) return;
-    try { const response = await fetch(state.config.relayUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'BOC', channel: 'BAF Operations', ...entry }) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); } catch (error) { if (state.config.debug) console.warn('[BOC] relay failed', error); }
+    const url = state.config.relayUrl || DEFAULT_RELAY;
+    if (!/^https:\/\//i.test(url)) return;
+    try {
+      if (typeof GM_xmlhttpRequest === 'function') {
+        return new Promise((resolve) => {
+          GM_xmlhttpRequest({
+            method: 'POST',
+            url,
+            headers: { 'Content-Type': 'application/json' },
+            data: JSON.stringify({ source: 'BOC', channel: 'BAF Operations', ...entry }),
+            onload: () => resolve(),
+            onerror: () => resolve(),
+            ontimeout: () => resolve(),
+          });
+        });
+      }
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'BOC', channel: 'BAF Operations', ...entry }) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (error) { if (state.config.debug) console.warn('[BOC] relay failed', error); }
   }
 
   function normalize(raw) {
