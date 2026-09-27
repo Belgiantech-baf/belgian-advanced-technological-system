@@ -18,7 +18,7 @@
   const LOG_KEY = 'boc.activity.v2';
   const MAX_LOG = 2500;
   const MAX_MESSAGES = 500;
-  const DEFAULT_RELAY = 'https://geofs-live-radar.onrender.com/api/boc/log';
+  const DEFAULT_RELAY = 'https://belgian-advanced-technological-system.onrender.com/api/boc/log';
   const BAF_IDENTIFIERS = ['BAF', '[BAF]', '(BAF)'];
   const MODULES = [
     ['communications', 'Communications'], ['chat', 'Chat Monitor'], ['baf', 'BAF Channel'], ['network', 'BAF Network'],
@@ -42,7 +42,20 @@
 
   function page() { return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window; }
   function merge(base, value) { const result = { ...base, ...value }; Object.keys(base).forEach((key) => { if (base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) result[key] = { ...base[key], ...(value?.[key] || {}) }; }); return result; }
-  function loadConfig() { try { return merge(DEFAULT_CONFIG, JSON.parse(localStorage.getItem(CONFIG_KEY) || localStorage.getItem(LEGACY_CONFIG_KEY) || '{}')); } catch { return merge({}, DEFAULT_CONFIG); } }
+  function loadConfig() {
+    try {
+      const raw = localStorage.getItem(CONFIG_KEY) || localStorage.getItem(LEGACY_CONFIG_KEY) || null;
+      if (!raw) {
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(DEFAULT_CONFIG));
+        return merge({}, DEFAULT_CONFIG);
+      }
+      const parsed = JSON.parse(raw);
+      return merge(DEFAULT_CONFIG, parsed || {});
+    } catch {
+      localStorage.setItem(CONFIG_KEY, JSON.stringify(DEFAULT_CONFIG));
+      return merge({}, DEFAULT_CONFIG);
+    }
+  }
   function loadLogs() { try { const value = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); return Array.isArray(value) ? value.slice(-MAX_LOG) : []; } catch { return []; } }
   function saveConfig() { localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config)); }
   function saveLogs() { state.logs = state.logs.slice(-MAX_LOG); localStorage.setItem(LOG_KEY, JSON.stringify(state.logs)); }

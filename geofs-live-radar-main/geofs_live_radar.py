@@ -650,9 +650,37 @@ def receive_boc_log():
   response.headers["Vary"] = "Origin"
   return response
 
+def fetch_upstream_map_feed():
+  """Fetch the GeoFS map feed and return a normalized dict, tolerating empty/non-JSON payloads."""
+  headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.geo-fs.com",
+    "Referer": "https://www.geo-fs.com/",
+  }
+  response = requests.post(UPSTREAM_URL, data={}, headers=headers, timeout=TIMEOUT)
+  response.raise_for_status()
+  if not response.content:
+    return {"users": [], "userCount": 0}
+  try:
+    payload = response.json()
+    if not isinstance(payload, dict):
+      return {"users": [], "userCount": 0}
+    return payload
+  except (TypeError, ValueError):
+    logger.warning(
+      "GeoFS upstream returned a non-JSON payload; status=%s content-type=%s snippet=%s",
+      response.status_code,
+      response.headers.get("Content-Type", "unknown"),
+      response.text[:200],
+    )
+    return {"users": [], "userCount": 0}
+
+
 @app.route("/api/map", methods=["GET"])
 def proxy_map():
-    """Proxy GeoFS map API."""
+    """Proxy GeoFS map API while keeping the client polling loop alive on empty upstream responses."""
     try:
         if TEST_MODE:
             test_data = {
@@ -667,19 +695,21 @@ def proxy_map():
             inspect_aircraft_feed(test_data)
             return make_response(json.dumps(test_data), 200, {"Content-Type": "application/json"})
 
-        r = requests.post(UPSTREAM_URL, data={}, timeout=TIMEOUT)
-        r.raise_for_status()
+        feed_data = fetch_upstream_map_feed()
         try:
-          feed_data = r.json()
           inspect_aircraft_feed(feed_data)
           inspect_chat_feed(feed_data)
         except Exception:
             logger.exception("Aircraft monitoring failed for an upstream response")
-        resp = make_response(r.content, 200)
+        resp = make_response(json.dumps(feed_data), 200)
         resp.headers["Content-Type"] = "application/json; charset=utf-8"
         return resp
+    except requests.RequestException as exc:
+        logger.warning("GeoFS upstream fetch failed: %s", exc)
+        return make_response(json.dumps({"users": [], "userCount": 0, "error": str(exc)}), 200, {"Content-Type": "application/json"})
     except Exception as e:
-        return make_response(json.dumps({"error": str(e)}), 502, {"Content-Type": "application/json"})
+        logger.exception("Unexpected error in /api/map proxy")
+        return make_response(json.dumps({"users": [], "userCount": 0, "error": str(e)}), 200, {"Content-Type": "application/json"})
 
 @app.route("/", methods=["GET"])
 def index():
